@@ -18,4 +18,6 @@ print_stdout = "deny"
 print_stderr = "deny"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)'] }
+# `daemon_tests` enables tests that need the `bitcoind` + `electrs` harness. It is a cfg rather
+# than a feature so that `--all-features` builds stay clean while the harness is Bitcoin-only.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)', 'cfg(daemon_tests)'] }

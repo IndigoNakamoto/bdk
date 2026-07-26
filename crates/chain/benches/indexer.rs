@@ -28,6 +28,8 @@ fn new_tx(lt: u32) -> Transaction {
         lock_time: absolute::LockTime::from_consensus(lt),
         input: vec![],
         output: vec![TxOut::NULL],
+        mw_tx: None,
+        is_hog_ex: false,
     }
 }
 

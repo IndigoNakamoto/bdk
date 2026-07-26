@@ -3,28 +3,36 @@
 #[macro_use]
 mod common;
 
-use std::{collections::BTreeSet, str::FromStr, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc};
+#[cfg(daemon_tests)]
+use std::str::FromStr;
 
 use bdk_chain::{
     indexed_tx_graph::{self, IndexedTxGraph},
     indexer::keychain_txout::KeychainTxOutIndex,
     local_chain::LocalChain,
-    spk_txout::SpkTxOutIndex,
     tx_graph, Balance, ChainPosition, ConfirmationBlockTime, DescriptorExt, SpkIterator,
 };
+#[cfg(daemon_tests)]
+use bdk_chain::spk_txout::SpkTxOutIndex;
+use bdk_testenv::{
+    block_id, hash,
+    utils::{new_tx, DESCRIPTORS},
+};
+#[cfg(daemon_tests)]
 use bdk_testenv::{
     anyhow::{self},
     bitcoind::{Input, Output},
-    block_id, hash,
-    utils::{new_tx, DESCRIPTORS},
     TestEnv,
 };
 use bitcoin::{
-    secp256k1::Secp256k1, Address, Amount, BlockHash, Network, OutPoint, ScriptBuf, Transaction,
-    TxIn, TxOut, Txid,
+    secp256k1::Secp256k1, Amount, BlockHash, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
 };
+#[cfg(daemon_tests)]
+use bitcoin::{Address, Network, Txid};
 use miniscript::Descriptor;
 
+#[cfg(daemon_tests)]
 fn gen_spk() -> ScriptBuf {
     use bitcoin::secp256k1::{Secp256k1, SecretKey};
 
@@ -42,6 +50,7 @@ fn gen_spk() -> ScriptBuf {
 /// fee, or because a conflict is confirmed?
 ///
 /// This tests the behavior of the "relevant-conflicts" logic.
+#[cfg(daemon_tests)]
 #[test]
 fn relevant_conflicts() -> anyhow::Result<()> {
     type SpkTxGraph = IndexedTxGraph<ConfirmationBlockTime, SpkTxOutIndex<()>>;

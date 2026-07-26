@@ -684,6 +684,8 @@ mod test {
             lock_time: absolute::LockTime::ZERO,
             input: vec![TxIn::default()],
             output: vec![TxOut::NULL],
+            mw_tx: None,
+            is_hog_ex: false,
         };
         let tx = Arc::new(tx);
         let txid = tx.compute_txid();
@@ -746,6 +748,8 @@ mod test {
             lock_time: absolute::LockTime::ZERO,
             input: vec![TxIn::default()],
             output: vec![TxOut::NULL],
+            mw_tx: None,
+            is_hog_ex: false,
         };
         let tx = Arc::new(tx);
         let txid = tx.compute_txid();

@@ -22,6 +22,8 @@ fn spk_txout_sent_and_received() {
             value: Amount::from_sat(42_000),
             script_pubkey: spk1.clone(),
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     assert_eq!(
@@ -64,6 +66,8 @@ fn spk_txout_sent_and_received() {
                 value: Amount::from_sat(30_000),
             },
         ],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     assert_eq!(
@@ -98,6 +102,8 @@ fn spk_txout_spent_created_txouts() {
             value: Amount::from_sat(42_000),
             script_pubkey: spk0.clone(),
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
     index.scan(&tx1);
     let spent_txouts = index.spent_txouts(&tx1).collect::<Vec<_>>();
@@ -140,6 +146,8 @@ fn spk_txout_spent_created_txouts() {
                 value: Amount::from_sat(30_000),
             },
         ],
+        mw_tx: None,
+        is_hog_ex: false,
     };
     index.scan(&tx2);
 
@@ -221,6 +229,8 @@ fn mark_used() {
             value: Amount::from_sat(42_000),
             script_pubkey: spk1,
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     spk_index.index_tx(&tx1);
@@ -263,6 +273,8 @@ fn outputs_in_range_excluded_bounds() {
             value: Amount::from_sat(10_000),
             script_pubkey: spk1,
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let tx2 = Transaction {
@@ -273,6 +285,8 @@ fn outputs_in_range_excluded_bounds() {
             value: Amount::from_sat(20_000),
             script_pubkey: spk2,
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let tx3 = Transaction {
@@ -283,6 +297,8 @@ fn outputs_in_range_excluded_bounds() {
             value: Amount::from_sat(30_000),
             script_pubkey: spk3,
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let tx4 = Transaction {
@@ -293,6 +309,8 @@ fn outputs_in_range_excluded_bounds() {
             value: Amount::from_sat(40_000),
             script_pubkey: spk4,
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let tx5 = Transaction {
@@ -303,6 +321,8 @@ fn outputs_in_range_excluded_bounds() {
             value: Amount::from_sat(50_000),
             script_pubkey: spk5,
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     spk_index.index_tx(&tx1);

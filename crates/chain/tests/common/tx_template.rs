@@ -134,6 +134,8 @@ pub fn init_graph<'a, A: Anchor + Clone + 'a>(
                     },
                 })
                 .collect(),
+            mw_tx: None,
+            is_hog_ex: false,
         };
 
         let txid = tx.compute_txid();

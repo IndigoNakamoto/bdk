@@ -74,6 +74,8 @@ pub fn new_tx(lt: u32) -> bitcoin::Transaction {
         lock_time: bitcoin::absolute::LockTime::from_consensus(lt),
         input: vec![],
         output: vec![],
+        mw_tx: None,
+        is_hog_ex: false,
     }
 }
 

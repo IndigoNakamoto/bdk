@@ -477,6 +477,8 @@ mod tests {
                 value: bitcoin::Amount::from_sat(1000),
                 script_pubkey: bitcoin::ScriptBuf::new(),
             }],
+            mw_tx: None,
+            is_hog_ex: false,
         };
         let _ = tx_graph.insert_tx(tx.clone());
         let txid = tx.compute_txid();

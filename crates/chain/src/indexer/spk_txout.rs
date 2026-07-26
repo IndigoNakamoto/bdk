@@ -336,7 +336,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// let mut index = SpkTxOutIndex::<u32>::default();
     ///
     /// // ... scan transactions to populate the index ...
-    /// # let tx = Transaction { version: bitcoin::transaction::Version::TWO, lock_time: bitcoin::locktime::absolute::LockTime::ZERO, input: vec![], output: vec![] };
+    /// # let tx = Transaction { version: bitcoin::transaction::Version::TWO, lock_time: bitcoin::locktime::absolute::LockTime::ZERO, input: vec![], output: vec![], mw_tx: None, is_hog_ex: false };
     ///
     /// // Get spent txouts for a transaction for all indexed spks
     /// let spent_txouts = index.spent_txouts(&tx);
@@ -386,7 +386,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
     /// let mut index = SpkTxOutIndex::<u32>::default();
     ///
     /// // ... scan transactions to populate the index ...
-    /// # let tx = Transaction { version: bitcoin::transaction::Version::TWO, lock_time: bitcoin::locktime::absolute::LockTime::ZERO, input: vec![], output: vec![] };
+    /// # let tx = Transaction { version: bitcoin::transaction::Version::TWO, lock_time: bitcoin::locktime::absolute::LockTime::ZERO, input: vec![], output: vec![], mw_tx: None, is_hog_ex: false };
     ///
     /// // Get created txouts for a transaction for all indexed spks
     /// let created_txouts = index.created_txouts(&tx);

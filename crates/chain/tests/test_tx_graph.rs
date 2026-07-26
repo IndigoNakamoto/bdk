@@ -63,6 +63,8 @@ fn insert_txouts() {
             value: Amount::from_sat(30_000),
             script_pubkey: ScriptBuf::new(),
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     // Conf anchor used to mark the full transaction as confirmed.
@@ -189,6 +191,8 @@ fn insert_tx_graph_doesnt_count_coinbase_as_spent() {
             ..Default::default()
         }],
         output: vec![],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let mut graph = TxGraph::<ConfirmationBlockTime>::default();
@@ -205,6 +209,8 @@ fn insert_tx_graph_keeps_track_of_spend() {
         lock_time: absolute::LockTime::ZERO,
         input: vec![],
         output: vec![TxOut::NULL],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let op = OutPoint {
@@ -220,6 +226,8 @@ fn insert_tx_graph_keeps_track_of_spend() {
             ..Default::default()
         }],
         output: vec![],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let mut graph1 = TxGraph::<ConfirmationBlockTime>::default();
@@ -249,6 +257,8 @@ fn insert_tx_can_retrieve_full_tx_from_graph() {
             ..Default::default()
         }],
         output: vec![TxOut::NULL],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let mut graph = TxGraph::<ConfirmationBlockTime>::default();
@@ -273,6 +283,8 @@ fn insert_tx_displaces_txouts() {
             value: Amount::from_sat(42_000),
             script_pubkey: ScriptBuf::default(),
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
     let txid = tx.compute_txid();
     let outpoint = OutPoint::new(txid, 0);
@@ -304,6 +316,8 @@ fn insert_tx_witness_precedence() {
             value: Amount::from_sat(24_000),
             script_pubkey: ScriptBuf::default(),
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
     let signed_tx = Transaction {
         input: vec![TxIn {
@@ -428,6 +442,8 @@ fn insert_txout_does_not_displace_tx() {
             value: Amount::from_sat(42_000),
             script_pubkey: ScriptBuf::new(),
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let _changeset = tx_graph.insert_tx(tx.clone());
@@ -484,6 +500,8 @@ fn test_calculate_fee() {
             value: Amount::from_sat(100),
             script_pubkey: ScriptBuf::new(),
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
     let intx2 = Transaction {
         version: transaction::Version::TWO,
@@ -493,6 +511,8 @@ fn test_calculate_fee() {
             value: Amount::from_sat(200),
             script_pubkey: ScriptBuf::new(),
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let intxout1 = (
@@ -537,6 +557,8 @@ fn test_calculate_fee() {
             value: Amount::from_sat(500),
             script_pubkey: ScriptBuf::new(),
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     assert_eq!(graph.calculate_fee(&tx), Ok(Amount::from_sat(100)));
@@ -574,6 +596,8 @@ fn test_calculate_fee_on_coinbase() {
             ..Default::default()
         }],
         output: vec![TxOut::NULL],
+        mw_tx: None,
+        is_hog_ex: false,
     };
 
     let graph = TxGraph::<()>::default();
@@ -1354,6 +1378,8 @@ fn tx_graph_update_conversion() {
             lock_time: absolute::LockTime::ZERO,
             input: vec![],
             output: vec![],
+            mw_tx: None,
+            is_hog_ex: false,
         }
     }
 
@@ -1539,6 +1565,8 @@ fn test_get_first_seen_of_a_tx() {
             value: Amount::from_sat(50_000),
             script_pubkey: ScriptBuf::new(),
         }],
+        mw_tx: None,
+        is_hog_ex: false,
     };
     let txid = tx.compute_txid();
     let seen_at = 1_000_000_u64;

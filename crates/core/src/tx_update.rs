@@ -11,7 +11,7 @@ use bitcoin::{OutPoint, Transaction, TxOut, Txid};
 /// # use bitcoin::{Transaction, transaction::Version, absolute::LockTime};
 /// # let version = Version::ONE;
 /// # let lock_time = LockTime::ZERO;
-/// # let tx = Arc::new(Transaction { input: vec![], output: vec![], version, lock_time });
+/// # let tx = Arc::new(Transaction { input: vec![], output: vec![], version, lock_time, mw_tx: None, is_hog_ex: false });
 /// # let txid = tx.compute_txid();
 /// # let anchor = ();
 /// let mut tx_update = TxUpdate::default();
