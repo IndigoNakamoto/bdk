@@ -67,23 +67,52 @@ git checkout litecoin && git merge master
 Conflicts should be confined to manifests. If a conflict appears in `.rs` files, that is a signal
 the port is drifting from the alias-only approach and should be corrected rather than patched over.
 
+## What the alias changes in the API
+
+Almost nothing, with one exception worth knowing about: `litecoin::Transaction` has two fields that
+`bitcoin::Transaction` does not, `mw_tx: Option<mimblewimble::Transaction>` and `is_hog_ex: bool`.
+Struct literals therefore have to initialise them, which accounts for most of the source diff
+against upstream. There is no `Default` impl to fall back on.
+
+Both fields are decode-only for a transparent wallet. Every block since MWEB activation ends with a
+HogEx ("Hogwarts Express") transaction that bridges value in and out of the extension block; it is
+serialized with segwit flag bit `0x08` set, which the upstream `bitcoin` decoder rejects outright.
+`crates/chain/tests/test_litecoin.rs` pins this down against a real mainnet transaction.
+
+## Running the Bitcoin-only test harness
+
+`bdk_testenv`'s `TestEnv` does not currently compile, because `electrsd` is typed on the upstream
+`bitcoin` crate. Reaching it takes two switches, which is deliberate: the `daemon` cargo feature
+pulls in the dependency, and the `daemon_tests` cfg compiles the code. Keeping them separate means
+`--all-features` stays green.
+
+```bash
+RUSTFLAGS="--cfg daemon_tests" cargo test --workspace --features bdk_testenv/daemon
+```
+
+Every test that needs a node is gated the same way, so the default test run covers only what works
+against Litecoin today.
+
 ## Known limitations
 
 These are inherited from the `litecoin` crate and the Litecoin infrastructure, not introduced here.
 
 - **The `litecoin` crate is a pre-release.** `0.32.8-rc.1` is the only published version; there is
   no stable release and the upstream repo publishes no git tags.
-- **Legacy P2SH addresses are rejected.** The crate only accepts and emits P2SH as `M…` (mainnet)
-  and `Q…` (testnet). Litecoin Core still honors the older `3…` / `2…` forms, so those cannot be
-  parsed or paid.
+- **Legacy P2SH addresses are silently renamed.** Litecoin Core keeps the `3…` (mainnet) and `2…`
+  (testnet) P2SH prefixes it inherited from Bitcoin spendable alongside `M…` and `Q…`. The crate
+  parses all four, but always renders the modern form, so an address handed to BDK in the legacy
+  form comes back out looking different. The script and the funds are the same.
 - **litecoinspace does not serve `/fee-estimates`.** The Esplora instance at
   `https://litecoinspace.org/api` (testnet: `https://litecoinspace.org/testnet/api`, *not*
   `/testnet4/api`) implements the endpoints `bdk_esplora` needs for syncing, but
-  `esplora_client::get_fee_estimates` will fail against it.
+  `esplora_client::get_fee_estimates` returns 404 against it.
 - **Litecoin's "testnet4" is not BIP-94 Testnet4.** It is only the data directory name, present
   since roughly 2017. The chain ID is `test`, there is no `-testnet4` flag, RPC is on 19332 (19335
   is P2P), and Litecoin Core carries no timewarp fix. The `litecoin` crate nonetheless spells this
-  network `Network::Testnet4`, which is the sole Litecoin testnet.
+  network `Network::Testnet4`, and it is the sole Litecoin testnet.
+- **Mainnet is spelled `Network::Bitcoin`.** The fork kept rust-bitcoin's variant names, so the
+  enum reads oddly but behaves correctly.
 - **Litecoin regtest magic is byte-identical to Bitcoin's** (`fabfb5da`), so regtest gives no
   protection against connecting to the wrong daemon. The genesis hashes do differ.
 - **Litecoin signet is a stub.** Litecoin Core maps `-signet` onto testnet parameters. Do not use

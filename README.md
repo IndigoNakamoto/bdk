@@ -21,6 +21,15 @@
   </h4>
 </div>
 
+> **This is a Litecoin fork of BDK.** Every crate keeps its `bdk_*` name and its `bitcoin::` paths,
+> but the `bitcoin` dependency is aliased to the [`litecoin`] crate, so those paths resolve to
+> Litecoin types. Read [PORTING.md](./PORTING.md) before using it: it covers the strategy, the
+> dependency forks it needs, and the limitations inherited from the Litecoin ecosystem.
+>
+> Scope so far is transparent (legacy and SegWit) UTXOs. MWEB transactions decode but are not
+> spendable, `bdk_bitcoind_rpc` is not ported, and the regtest test harness still targets Bitcoin
+> Core.
+
 ## About
 
 The `bdk` libraries aim to provide well engineered and reviewed components for Bitcoin wallets and other applications.
@@ -36,11 +45,12 @@ The workspace in this repository contains several crates in the `/crates` direct
 | [`core`](./crates/core) | A collection of core structures used by the [`bdk_chain`], [`bdk_wallet`], and BDK's chain data source crates. | ![Core Crate Info](https://img.shields.io/crates/v/bdk_core.svg) ![Core API Docs](https://img.shields.io/badge/docs.rs-bdk_core-green) |
 | [`esplora`](./crates/esplora) | Extends the [`esplora-client`] crate with methods to fetch chain data from an esplora HTTP server in the form that [`bdk_chain`] and `Wallet` can consume. | ![Esplora Crate Info](https://img.shields.io/crates/v/bdk_esplora.svg) ![Esplora API Docs](https://img.shields.io/badge/docs.rs-bdk_esplora-green) |
 | [`electrum`](./crates/electrum) | Extends the [`electrum-client`] crate with methods to fetch chain data from an electrum server in the form that [`bdk_chain`] and `Wallet` can consume. | ![Electrum Crate Info](https://img.shields.io/crates/v/bdk_electrum.svg) ![Electrum API Docs](https://img.shields.io/badge/docs.rs-bdk_electrum-green) |
-| [`bitcoind_rpc`](./crates/bitcoind_rpc) | Extends [`bitcoincore-rpc`] for emitting blockchain data from the `bitcoind` RPC interface in the form that [`bdk_chain`] and `Wallet` can consume. | ![BitcoinD RPC Crate Info](https://img.shields.io/crates/v/bdk_bitcoind_rpc.svg) ![BitcoinD RPC API Docs](https://img.shields.io/badge/docs.rs-bdk_bitcoind_rpc-green) |
+| [`bitcoind_rpc`](./crates/bitcoind_rpc) | Extends [`bitcoincore-rpc`] for emitting blockchain data from the `bitcoind` RPC interface in the form that [`bdk_chain`] and `Wallet` can consume. **Not ported: excluded from the workspace.** | ![BitcoinD RPC Crate Info](https://img.shields.io/crates/v/bdk_bitcoind_rpc.svg) ![BitcoinD RPC API Docs](https://img.shields.io/badge/docs.rs-bdk_bitcoind_rpc-green) |
 | [`file_store`](./crates/file_store) | Persistence backend for storing chain data in a single file. Intended for testing and development purposes, not for production. | ![File Store Crate Info](https://img.shields.io/crates/v/bdk_file_store.svg) ![File Store API Docs](https://img.shields.io/badge/docs.rs-bdk_file_store-green) |
 
 The [`bdk_wallet`] repository and crate contains a higher level `Wallet` type that depends on the above lower-level mechanism crates.
 
+[`litecoin`]: https://crates.io/crates/litecoin
 [`rust-miniscript`]: https://github.com/rust-bitcoin/rust-miniscript
 [`rust-bitcoin`]: https://github.com/rust-bitcoin/rust-bitcoin
 [`esplora-client`]: https://docs.rs/esplora-client/
@@ -55,7 +65,6 @@ The following BDK crates maintains a MSRV of 1.85.0. To build these crates with 
 
 - `bdk_core`
 - `bdk_chain`
-- `bdk_bitcoind_rpc`
 - `bdk_esplora`
 - `bdk_file_store`
 - `bdk_electrum`

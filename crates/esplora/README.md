@@ -6,6 +6,23 @@ BDK Esplora extends [`esplora-client`] (with extension traits: [`EsploraExt`] an
 The extension traits are primarily intended to satisfy [`SyncRequest`]s with [`sync`] and
 [`FullScanRequest`]s with [`full_scan`].
 
+## Litecoin servers
+
+The public Litecoin Esplora instance is [litecoinspace.org](https://litecoinspace.org):
+
+| Network | Base URL |
+| --- | --- |
+| mainnet | `https://litecoinspace.org/api` |
+| testnet | `https://litecoinspace.org/testnet/api` |
+
+Note that the testnet path is `/testnet`, not `/testnet4`, even though the `litecoin` crate spells
+that network `Network::Testnet4`. Litecoin's "testnet4" is a data directory name dating to around
+2017 and is unrelated to Bitcoin's BIP-94 Testnet4.
+
+litecoinspace does not implement `/fee-estimates`, so
+[`esplora_client::get_fee_estimates`](https://docs.rs/esplora-client/) fails against it. Syncing is
+unaffected; fee estimation needs another source.
+
 ## Usage
 
 For blocking-only:
