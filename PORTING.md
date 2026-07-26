@@ -55,17 +55,17 @@ and no duplicate types appear.
 
 ## Scope
 
-Ported: `bdk_core`, `bdk_chain`, `bdk_file_store`, `bdk_electrum`, `bdk_esplora`, and the
-dependency-free parts of `bdk_testenv`.
+Ported: `bdk_core`, `bdk_chain`, `bdk_file_store`, `bdk_electrum`, `bdk_esplora`, and
+`bdk_testenv` (including the Litecoin regtest harness). Wallet work lives in the separate
+[`IndigoNakamoto/bdk_wallet`](https://github.com/IndigoNakamoto/bdk_wallet) `litecoin` branch.
 
 Deferred:
 
 - **`bdk_bitcoind_rpc`** — needs a `bitcoincore-rpc` 0.19 fork. The only Litecoin-aware fork
   (`ynohtna92/rust-bitcoincore-rpc`) is 0.17, unpublished, and last touched in February 2024.
-- **Daemon-backed integration tests** — `bdk_testenv`'s `TestEnv` drives `electrsd` plus a
-  downloaded Bitcoin Core binary. Replacing it with `litecoind` + `electrs-ltc` is its own project;
-  until then that surface lives behind the non-default `daemon` feature.
-- **`bdk_wallet`** — descriptors, address generation, and PSBT live in a separate upstream repo.
+- **Regtest Esplora** — there is no packaged Litecoin regtest Esplora server, so Esplora coverage
+  stays on live testnet (`just test-live`). Chain/Electrum daemon tests use `litecoind` +
+  `electrs-ltc` via `just test-regtest`.
 
 ## Merging upstream
 
@@ -91,19 +91,20 @@ HogEx ("Hogwarts Express") transaction that bridges value in and out of the exte
 serialized with segwit flag bit `0x08` set, which the upstream `bitcoin` decoder rejects outright.
 `crates/chain/tests/test_litecoin.rs` pins this down against a real mainnet transaction.
 
-## Running the Bitcoin-only test harness
+## Regtest harness (`litecoind` + `electrs-ltc`)
 
-`bdk_testenv`'s `TestEnv` does not currently compile, because `electrsd` is typed on the upstream
-`bitcoin` crate. Reaching it takes two switches, which is deliberate: the `daemon` cargo feature
-pulls in the dependency, and the `daemon_tests` cfg compiles the code. Keeping them separate means
-`--all-features` stays green.
+Feature `bdk_testenv/litecoin-daemon` spawns binaries from `LITECOIND_EXE` and `ELECTRS_LTC_EXE`.
+Tests skip with a printed notice when those are unset, so the default `just test` stays green
+without local daemons. To run the migrated daemon tests:
 
 ```bash
-RUSTFLAGS="--cfg daemon_tests" cargo test --workspace --features bdk_testenv/daemon
+export LITECOIND_EXE=/path/to/litecoind
+export ELECTRS_LTC_EXE=/path/to/electrs   # build from rust-litecoin/electrs-ltc
+just test-regtest
 ```
 
-Every test that needs a node is gated the same way, so the default test run covers only what works
-against Litecoin today.
+The upstream Bitcoin `TestEnv` (`electrsd`) remains behind `daemon` + `RUSTFLAGS='--cfg
+daemon_tests'` for merge hygiene only; it does not compile against the `litecoin` alias.
 
 ## Known limitations
 

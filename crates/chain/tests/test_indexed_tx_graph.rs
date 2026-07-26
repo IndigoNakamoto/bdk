@@ -3,23 +3,13 @@
 #[macro_use]
 mod common;
 
-#[cfg(daemon_tests)]
-use std::str::FromStr;
 use std::{collections::BTreeSet, sync::Arc};
 
-#[cfg(daemon_tests)]
-use bdk_chain::spk_txout::SpkTxOutIndex;
 use bdk_chain::{
     indexed_tx_graph::{self, IndexedTxGraph},
     indexer::keychain_txout::KeychainTxOutIndex,
     local_chain::LocalChain,
     tx_graph, Balance, ChainPosition, ConfirmationBlockTime, DescriptorExt, SpkIterator,
-};
-#[cfg(daemon_tests)]
-use bdk_testenv::{
-    anyhow::{self},
-    bitcoind::{Input, Output},
-    TestEnv,
 };
 use bdk_testenv::{
     block_id, hash,
@@ -28,20 +18,7 @@ use bdk_testenv::{
 use bitcoin::{
     secp256k1::Secp256k1, Amount, BlockHash, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,
 };
-#[cfg(daemon_tests)]
-use bitcoin::{Address, Network, Txid};
 use miniscript::Descriptor;
-
-#[cfg(daemon_tests)]
-fn gen_spk() -> ScriptBuf {
-    use bitcoin::secp256k1::{Secp256k1, SecretKey};
-
-    let secp = Secp256k1::new();
-    let (x_only_pk, _) = SecretKey::new(&mut rand::thread_rng())
-        .public_key(&secp)
-        .x_only_public_key();
-    ScriptBuf::new_p2tr(&secp, x_only_pk, None)
-}
 
 /// Conflicts of relevant transactions must also be considered relevant.
 ///
@@ -50,16 +27,35 @@ fn gen_spk() -> ScriptBuf {
 /// fee, or because a conflict is confirmed?
 ///
 /// This tests the behavior of the "relevant-conflicts" logic.
-#[cfg(daemon_tests)]
+///
+/// Requires `LITECOIND_EXE` and `ELECTRS_LTC_EXE`; skips when unset.
 #[test]
-fn relevant_conflicts() -> anyhow::Result<()> {
+fn relevant_conflicts() -> bdk_testenv::anyhow::Result<()> {
+    use bdk_chain::spk_txout::SpkTxOutIndex;
+    use bdk_testenv::{anyhow, LitecoinTestEnv};
+    use bitcoin::{secp256k1::SecretKey, Address, Network, Txid};
+
+    if std::env::var_os("LITECOIND_EXE").is_none() || std::env::var_os("ELECTRS_LTC_EXE").is_none()
+    {
+        eprintln!("skip: set LITECOIND_EXE and ELECTRS_LTC_EXE to run relevant_conflicts");
+        return Ok(());
+    }
+
     type SpkTxGraph = IndexedTxGraph<ConfirmationBlockTime, SpkTxOutIndex<()>>;
+
+    fn gen_spk() -> ScriptBuf {
+        // Prefer P2WPKH so older litecoind builds (pre-Taproot) can still fund the receiver.
+        let secp = Secp256k1::new();
+        let sk = SecretKey::new(&mut rand::thread_rng());
+        let pk = bitcoin::PublicKey::new(sk.public_key(&secp));
+        ScriptBuf::new_p2wpkh(&pk.wpubkey_hash().expect("compressed"))
+    }
 
     /// This environment contains a sender and receiver.
     ///
     /// The sender sends a transaction to the receiver and attempts to cancel it later.
     struct ScenarioEnv {
-        env: TestEnv,
+        env: LitecoinTestEnv,
         graph: SpkTxGraph,
         tx_send: Transaction,
         tx_cancel: Transaction,
@@ -67,16 +63,11 @@ fn relevant_conflicts() -> anyhow::Result<()> {
 
     impl ScenarioEnv {
         fn new() -> anyhow::Result<Self> {
-            let env = TestEnv::new()?;
-            let client = env.rpc_client();
-
-            let sender_addr = client
-                .get_new_address(None, None)?
-                .address()?
-                .require_network(Network::Regtest)?;
+            let env = LitecoinTestEnv::from_env()?;
+            let sender_addr = env.rpc.get_new_address()?;
 
             let recv_spk = gen_spk();
-            let recv_addr = Address::from_script(&recv_spk, &bitcoin::params::REGTEST)?;
+            let recv_addr = Address::from_script(&recv_spk, Network::Regtest)?;
 
             let mut graph = SpkTxGraph::default();
             assert!(graph.index.insert_spk((), recv_spk));
@@ -84,39 +75,25 @@ fn relevant_conflicts() -> anyhow::Result<()> {
             env.mine_blocks(1, Some(sender_addr.clone()))?;
             env.mine_blocks(101, None)?;
 
-            let tx_input = client
+            let utxo = env
+                .rpc
                 .list_unspent()?
-                .0
                 .into_iter()
-                .take(1)
-                .map(|r| Input {
-                    txid: Txid::from_str(&r.txid).expect("should successfully parse the `Txid`"),
-                    vout: r.vout as u64,
-                    sequence: None,
-                })
-                .collect::<Vec<_>>();
-            let tx_send = {
-                let outputs = [Output::new(recv_addr, Amount::from_btc(49.999_99)?)];
-                let tx = client
-                    .create_raw_transaction(&tx_input, &outputs)?
-                    .into_model()?
-                    .0;
-                client
-                    .sign_raw_transaction_with_wallet(&tx)?
-                    .into_model()?
-                    .tx
-            };
-            let tx_cancel = {
-                let outputs = [Output::new(sender_addr, Amount::from_btc(49.999_98)?)];
-                let tx = client
-                    .create_raw_transaction(&tx_input, &outputs)?
-                    .into_model()?
-                    .0;
-                client
-                    .sign_raw_transaction_with_wallet(&tx)?
-                    .into_model()?
-                    .tx
-            };
+                .find(|u| u.amount >= Amount::from_int_btc(50))
+                .expect("must have a 50 LTC coinbase UTXO");
+            let inputs = [(utxo.txid, utxo.vout)];
+            // Litecoin Core's RBF incremental-fee check is stricter than the classic 1 sat bump
+            // used in the Bitcoin TestEnv fixture; leave a clearer fee gap.
+            let tx_send = env.rpc.create_and_sign_tx(
+                &inputs,
+                &recv_addr,
+                utxo.amount - Amount::from_sat(100_000),
+            )?;
+            let tx_cancel = env.rpc.create_and_sign_tx(
+                &inputs,
+                &sender_addr,
+                utxo.amount - Amount::from_sat(1_000_000),
+            )?;
 
             Ok(Self {
                 env,
@@ -130,18 +107,18 @@ fn relevant_conflicts() -> anyhow::Result<()> {
         ///
         /// Scans through all transactions in the blockchain + mempool.
         fn sync(&mut self) -> anyhow::Result<()> {
-            let client = self.env.rpc_client();
-            for height in 0..=client.get_block_count()?.into_model().0 {
-                let hash = client.get_block_hash(height)?.block_hash()?;
-                let block = client.get_block(hash)?;
-                let _ = self.graph.apply_block_relevant(&block, height as _);
+            let tip = self.env.rpc.get_block_count()?;
+            for height in 0..=tip {
+                let hash = self.env.rpc.get_block_hash(height)?;
+                let block = self.env.rpc.get_block(&hash)?;
+                let _ = self.graph.apply_block_relevant(&block, height);
             }
 
-            let mempool_txids = client.get_raw_mempool()?.into_model()?.0;
+            let mempool_txids = self.env.rpc.get_raw_mempool()?;
             let unconfirmed_txs: Vec<(Transaction, u64)> = mempool_txids
                 .iter()
                 .map(|txid| -> anyhow::Result<_> {
-                    let tx = client.get_raw_transaction(*txid)?.transaction()?;
+                    let tx = self.env.rpc.get_raw_transaction(txid)?;
                     Ok((tx, 0))
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -153,14 +130,12 @@ fn relevant_conflicts() -> anyhow::Result<()> {
 
         /// Broadcast the original sending transaction.
         fn broadcast_send(&self) -> anyhow::Result<Txid> {
-            let client = self.env.rpc_client();
-            Ok(client.send_raw_transaction(&self.tx_send)?.txid()?)
+            self.env.rpc.send_raw_transaction(&self.tx_send)
         }
 
         /// Broadcast the cancellation transaction.
         fn broadcast_cancel(&self) -> anyhow::Result<Txid> {
-            let client = self.env.rpc_client();
-            Ok(client.send_raw_transaction(&self.tx_cancel)?.txid()?)
+            self.env.rpc.send_raw_transaction(&self.tx_cancel)
         }
     }
 

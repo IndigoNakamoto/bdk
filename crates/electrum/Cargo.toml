@@ -18,7 +18,7 @@ bdk_core = { path = "../core", version = "0.6.1" }
 electrum-client = { git = "https://github.com/IndigoNakamoto/rust-electrum-client", rev = "b6b6ee44eca962032ddc4d3e93b896e693d8439f", features = [ "proxy" ], default-features = false }
 
 [dev-dependencies]
-bdk_testenv = { path = "../testenv" }
+bdk_testenv = { path = "../testenv", features = ["litecoin-daemon"] }
 bdk_chain = { path = "../chain" }
 criterion = { version = "0.7" }
 

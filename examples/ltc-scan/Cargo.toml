@@ -1,0 +1,19 @@
+[package]
+name = "ltc-scan"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85.0"
+license = "MIT OR Apache-2.0"
+description = "Watch-only Litecoin descriptor scanner built on the Litecoin fork of BDK"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+bdk_chain = { path = "../../crates/chain" }
+bdk_electrum = { path = "../../crates/electrum" }
+bdk_esplora = { path = "../../crates/esplora", default-features = false, features = ["std", "blocking-https"] }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"

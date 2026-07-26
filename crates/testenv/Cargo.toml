@@ -20,6 +20,12 @@ bdk_chain = { path = "../chain", version = "0.23.1", default-features = false }
 anyhow = { version = "1", default-features = false }
 electrsd = { version = "0.38.0", features = [ "legacy" ], default-features = false, optional = true }
 bitcoin = { package = "litecoin", version = "0.32.8-rc.1", default-features = false }
+# Litecoin regtest harness (feature = "litecoin-daemon")
+ureq = { version = "3", optional = true, default-features = true }
+serde = { version = "1", optional = true, features = ["derive"] }
+serde_json = { version = "1", optional = true }
+tempfile = { version = "3", optional = true }
+base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
 bdk_testenv = { path = "." }
@@ -31,6 +37,8 @@ default = ["std"]
 # on. The harness code also needs the `daemon_tests` cfg; see src/lib.rs.
 daemon = ["std", "dep:electrsd"]
 download = ["daemon", "electrsd/bitcoind_download", "electrsd/bitcoind_28_2", "electrsd/esplora_a33e97e1"]
+# Spawns locally provided `litecoind` + `electrs-ltc` (LITECOIND_EXE / ELECTRS_LTC_EXE).
+litecoin-daemon = ["std", "dep:ureq", "dep:serde", "dep:serde_json", "dep:tempfile", "dep:base64"]
 std = ["bdk_chain/std", "bitcoin/rand-std", "anyhow/std"]
 serde = ["bdk_chain/serde"]
 

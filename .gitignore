@@ -10,3 +10,6 @@ Cargo.lock
 *.sqlite*
 
 crates/electrum/target
+
+# Nested clone of IndigoNakamoto/bdk_wallet (separate repo; see PORTING.md).
+/bdk_wallet/

@@ -54,6 +54,26 @@ _test-file_store:
 _test-testenv:
     cargo test -p bdk_testenv --all-features
 
+# Live sync against litecoinspace / Electrum-LTC (ignored by default; needs network).
+test-live:
+    cargo test -p bdk_esplora --test live_litecoin --features blocking-https -- --ignored --nocapture
+    cargo test -p bdk_electrum --test live_litecoin -- --ignored --nocapture --test-threads=1
+
+# Regtest against locally provided litecoind + electrs-ltc.
+# Requires LITECOIND_EXE and ELECTRS_LTC_EXE. Esplora daemon tests stay gated (no regtest Esplora).
+test-regtest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${LITECOIND_EXE:-}" || -z "${ELECTRS_LTC_EXE:-}" ]]; then
+      echo "Set LITECOIND_EXE and ELECTRS_LTC_EXE to absolute binary paths."
+      echo "electrs-ltc has no prebuilt releases; build from https://github.com/rust-litecoin/electrs-ltc"
+      exit 1
+    fi
+    cargo test -p bdk_chain --test test_indexed_tx_graph relevant_conflicts -- --exact --nocapture
+    cargo test -p bdk_electrum --lib \
+      bdk_electrum_client::test:: \
+      -- --nocapture --test-threads=1
+
 # Run pre-push suite: format, check, and test
 pre-push: fmt check test
 

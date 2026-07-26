@@ -7,10 +7,12 @@ members = [
     "crates/electrum",
     "crates/esplora",
     "crates/testenv",
+    "examples/ltc-scan",
 ]
 # `crates/bitcoind_rpc` is not part of this fork yet: it needs a Litecoin build of
 # `bitcoincore-rpc`, which does not exist for the 0.19 series. See PORTING.md.
-exclude = ["crates/bitcoind_rpc"]
+# `bdk_wallet` is a nested clone of the separate IndigoNakamoto/bdk_wallet fork.
+exclude = ["crates/bitcoind_rpc", "bdk_wallet"]
 
 [workspace.package]
 authors = ["Bitcoin Dev Kit Developers"]

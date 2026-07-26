@@ -737,8 +737,9 @@ fn chain_update(
     Ok(tip)
 }
 
-// Needs the `bitcoind` + `electrs` harness; see `bdk_testenv`'s `daemon` feature.
-#[cfg(all(test, daemon_tests))]
+// Needs `litecoind` + `electrs-ltc` via `bdk_testenv`'s `litecoin-daemon` feature
+// (`LITECOIND_EXE` / `ELECTRS_LTC_EXE`). Skips cleanly when those are unset.
+#[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[allow(unused_imports)]
 mod test {
@@ -747,17 +748,22 @@ mod test {
     use bdk_chain::bitcoin::{constants, Network, OutPoint, ScriptBuf, Transaction, TxIn};
     use bdk_chain::CheckPoint;
     use bdk_core::{collections::BTreeMap, spk_client::SyncRequest};
-    use bdk_testenv::{anyhow, utils::new_tx, TestEnv};
+    use bdk_testenv::{anyhow, utils::new_tx, LitecoinTestEnv};
     use core::time::Duration;
     use electrum_client::Error as ElectrumError;
     use std::sync::Arc;
 
+    fn try_env() -> anyhow::Result<Option<LitecoinTestEnv>> {
+        bdk_testenv::try_from_env()
+    }
+
     #[cfg(feature = "default")]
     #[test]
-    fn test_fetch_prev_txout_with_coinbase() {
-        let env = TestEnv::new().unwrap();
-        let electrum_client =
-            electrum_client::Client::new(env.electrsd.electrum_url.as_str()).unwrap();
+    fn test_fetch_prev_txout_with_coinbase() -> anyhow::Result<()> {
+        let Some(env) = try_env()? else {
+            return Ok(());
+        };
+        let electrum_client = electrum_client::Client::new(env.electrum_url.as_str())?;
         let client = BdkElectrumClient::new(electrum_client);
 
         // Create a coinbase transaction.
@@ -781,19 +787,23 @@ mod test {
 
         // Ensure that the txouts are empty.
         assert_eq!(tx_update.txouts, BTreeMap::default());
+        Ok(())
     }
 
     #[cfg(feature = "default")]
     #[test]
     fn test_sync_wrong_network_error() -> anyhow::Result<()> {
-        let env = TestEnv::new()?;
-        let client = electrum_client::Client::new(env.electrsd.electrum_url.as_str()).unwrap();
+        let Some(env) = try_env()? else {
+            return Ok(());
+        };
+        let client = electrum_client::Client::new(env.electrum_url.as_str())?;
         let electrum_client = BdkElectrumClient::new(client);
 
-        let _ = env.mine_blocks(1, None).unwrap();
+        let _ = env.mine_blocks(1, None)?;
 
         let bogus_spks: Vec<ScriptBuf> = Vec::new();
-        let bogus_genesis = constants::genesis_block(Network::Testnet).block_hash();
+        // Litecoin's testnet is spelled `Testnet4` in the alias crate.
+        let bogus_genesis = constants::genesis_block(Network::Testnet4).block_hash();
         let bogus_cp = CheckPoint::new(0, bogus_genesis);
 
         let req = SyncRequest::builder()
@@ -822,23 +832,21 @@ mod test {
     #[cfg(feature = "default")]
     #[test]
     fn test_batch_fetch_anchors_reorg_uses_new_hash() -> anyhow::Result<()> {
-        let env = TestEnv::new()?;
-        let client = electrum_client::Client::new(env.electrsd.electrum_url.as_str()).unwrap();
+        let Some(env) = try_env()? else {
+            return Ok(());
+        };
+        let client = electrum_client::Client::new(env.electrum_url.as_str())?;
         let electrum_client = BdkElectrumClient::new(client);
 
         env.mine_blocks(101, None)?;
 
-        let addr = env
-            .rpc_client()
-            .get_new_address(None, None)?
-            .address()?
-            .assume_checked();
+        let addr = env.rpc.get_new_address()?;
         let txid = env.send(&addr, Amount::from_sat(50_000))?;
 
         // Mine block that confirms transaction.
         env.mine_blocks(1, None)?;
-        env.wait_until_electrum_sees_block(Duration::from_secs(6))?;
-        let height: u32 = env.rpc_client().get_block_count()?.into_model().0 as u32;
+        env.wait_until_electrum_sees_block(Duration::from_secs(30))?;
+        let height = env.rpc.get_block_count()?;
 
         // Add the pre-reorg block that the tx is confirmed in to the header cache.
         let header = electrum_client.inner.block_header(height as usize)?;
@@ -852,7 +860,7 @@ mod test {
 
         // Reorg to create a new header and hash.
         env.reorg(1)?;
-        env.wait_until_electrum_sees_block(Duration::from_secs(6))?;
+        env.wait_until_electrum_sees_block(Duration::from_secs(30))?;
 
         // Calling `batch_fetch_anchors` should fetch new header, replacing the pre-reorg header.
         let anchors = electrum_client.batch_fetch_anchors(&[(txid, height as usize)])?;
