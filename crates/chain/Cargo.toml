@@ -19,7 +19,7 @@ workspace = true
 bitcoin = { package = "litecoin", version = "0.32.8-rc.1", default-features = false }
 bdk_core = { path = "../core", version = "0.6.2", default-features = false }
 serde = { version = "1", optional = true, features = ["derive", "rc"] }
-miniscript = { git = "https://github.com/IndigoNakamoto/rust-miniscript", rev = "184241f5767c32e1dae2fbd4e7e91c737c95cc3e", optional = true, default-features = false }
+miniscript = { git = "https://github.com/IndigoNakamoto/rust-miniscript", rev = "e3187272617adad69f5b9ece62d25ea28b70fd25", optional = true, default-features = false }
 
 # Feature dependencies
 rusqlite = { version = "0.31.0", features = ["bundled"], optional = true }

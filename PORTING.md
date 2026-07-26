@@ -33,9 +33,21 @@ nothing else, keeping the upstream *package* names so BDK manifests only change 
 
 | Dependency | Fork | Upstream base |
 | --- | --- | --- |
-| `miniscript` | `IndigoNakamoto/rust-miniscript` branch `litecoin` | 13.0.0 |
+| `miniscript` | `IndigoNakamoto/rust-miniscript` branch `litecoin-12.x` | 12.3.7 |
 | `electrum-client` | `IndigoNakamoto/rust-electrum-client` branch `litecoin` | 0.24.1 |
 | `esplora-client` | `IndigoNakamoto/rust-esplora-client` branch `litecoin` | 0.12.3 |
+
+### Why miniscript sits on the 12.x line
+
+Upstream `bdk_chain` master requires `miniscript` 13, but `bdk_wallet` 3.1.0 requires `^12.3.1`, and
+two majors of the same crate cannot coexist in one dependency graph. Since `bdk_chain` only touches
+`Descriptor`, `DescriptorPublicKey`, `at_derivation_index`, and `derived_descriptor` — all
+unchanged across the 12/13 boundary — moving the chain crate down to 12.x costs nothing, while
+moving the wallet up would mean rewriting `policy.rs`, `dsl.rs`, and `signer.rs` against
+miniscript 13's Taproot and error-type rewrite.
+
+A port of 13.1.0 also exists, on the `litecoin` branch of the same fork. It is parked until
+`bdk_wallet` upstream moves to miniscript 13.
 
 The `litecoin` crate depends on unforked `secp256k1`, `bitcoin_hashes`, `bitcoin-internals`,
 `bitcoin-io`, and `base58ck`, so the dependency tree stays shared with the rust-bitcoin ecosystem
