@@ -98,32 +98,8 @@ jobs:
       - name: Test (all features)
         run: cargo test --all-features
 
-  build-bitcoind-rpc:
-    needs: prepare
-    name: bdk_bitcoind_rpc
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./crates/bitcoind_rpc
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: ${{ needs.prepare.outputs.rust_version }}
-          cache: true
-      - name: Build (default features)
-        run: cargo build
-      - name: Build (no default features)
-        run: cargo build --no-default-features
-      - name: Build (serde)
-        run: cargo build --no-default-features --features serde
-      - name: Build (all features)
-        run: cargo build --all-features
-      - name: Test (all features)
-        run: cargo test --all-features
+  # bdk_bitcoind_rpc has no job: it is excluded from the workspace until a Litecoin build of
+  # bitcoincore-rpc exists. See PORTING.md.
 
   build-electrum:
     needs: prepare
@@ -232,6 +208,8 @@ jobs:
         run: cargo build --no-default-features
       - name: Build (std, no download)
         run: cargo build --no-default-features --features std
+      # This builds electrsd but not the harness itself, which additionally needs the
+      # `daemon_tests` cfg and does not compile against the litecoin crate. See PORTING.md.
       - name: Build (all features)
         run: cargo build --all-features
       - name: Test (all features)
