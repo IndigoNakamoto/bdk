@@ -28,6 +28,11 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 pub use bitcoin;
+/// The `litecoin` crate, re-exported under its own name.
+///
+/// This is the same crate as [`bitcoin`]: the dependency is aliased so that this fork tracks
+/// upstream BDK without touching its source.
+pub use bitcoin as litecoin;
 mod balance;
 pub use balance::*;
 mod chain_data;
