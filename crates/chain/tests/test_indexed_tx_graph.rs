@@ -3,10 +3,12 @@
 #[macro_use]
 mod common;
 
-use std::{collections::BTreeSet, sync::Arc};
 #[cfg(daemon_tests)]
 use std::str::FromStr;
+use std::{collections::BTreeSet, sync::Arc};
 
+#[cfg(daemon_tests)]
+use bdk_chain::spk_txout::SpkTxOutIndex;
 use bdk_chain::{
     indexed_tx_graph::{self, IndexedTxGraph},
     indexer::keychain_txout::KeychainTxOutIndex,
@@ -14,16 +16,14 @@ use bdk_chain::{
     tx_graph, Balance, ChainPosition, ConfirmationBlockTime, DescriptorExt, SpkIterator,
 };
 #[cfg(daemon_tests)]
-use bdk_chain::spk_txout::SpkTxOutIndex;
-use bdk_testenv::{
-    block_id, hash,
-    utils::{new_tx, DESCRIPTORS},
-};
-#[cfg(daemon_tests)]
 use bdk_testenv::{
     anyhow::{self},
     bitcoind::{Input, Output},
     TestEnv,
+};
+use bdk_testenv::{
+    block_id, hash,
+    utils::{new_tx, DESCRIPTORS},
 };
 use bitcoin::{
     secp256k1::Secp256k1, Amount, BlockHash, OutPoint, ScriptBuf, Transaction, TxIn, TxOut,

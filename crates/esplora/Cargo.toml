@@ -27,6 +27,7 @@ esplora-client = { git = "https://github.com/IndigoNakamoto/rust-esplora-client"
 bdk_chain = { path = "../chain" }
 bdk_testenv = { path = "../testenv" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+serde_json = { version = "1" }
 
 [features]
 default = ["std", "async-https", "blocking-https"]

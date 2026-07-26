@@ -1,5 +1,7 @@
-// Needs the `bitcoind` + `electrs` harness; see `bdk_testenv`'s `daemon` feature.
-#![cfg(daemon_tests)]
+// The benchmark itself needs the `bitcoind` + `electrs` harness, so it is gated on the
+// `daemon_tests` cfg; see `bdk_testenv`'s `daemon` feature. The helpers below stay compiled so
+// they keep tracking upstream.
+#![cfg_attr(not(daemon_tests), allow(dead_code, unused_imports))]
 
 use bdk_chain::bitcoin::{Address, Amount, ScriptBuf};
 use bdk_core::{
@@ -13,7 +15,9 @@ use bdk_core::{
     CheckPoint,
 };
 use bdk_electrum::BdkElectrumClient;
-use bdk_testenv::{anyhow, TestEnv};
+use bdk_testenv::anyhow;
+#[cfg(daemon_tests)]
+use bdk_testenv::TestEnv;
 use criterion::{criterion_group, criterion_main, Criterion};
 use electrum_client::ElectrumApi;
 use std::{collections::BTreeSet, time::Duration};
@@ -54,6 +58,7 @@ fn sync_with_electrum<E: ElectrumApi>(
     Ok(())
 }
 
+#[cfg(daemon_tests)]
 pub fn test_sync_performance(c: &mut Criterion) {
     let env = TestEnv::new().unwrap();
 
@@ -117,10 +122,17 @@ pub fn test_sync_performance(c: &mut Criterion) {
     }
 }
 
+#[cfg(daemon_tests)]
 criterion_group! {
     name = benches;
     config = Criterion::default()
         .sample_size(10);
     targets = test_sync_performance
 }
+#[cfg(daemon_tests)]
 criterion_main!(benches);
+
+// `harness = false` means this target must define `main`, and `criterion_main!` above is what
+// normally provides it.
+#[cfg(not(daemon_tests))]
+fn main() {}
