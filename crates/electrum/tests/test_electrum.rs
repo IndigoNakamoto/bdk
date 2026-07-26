@@ -1,3 +1,6 @@
+// Needs the `bitcoind` + `electrs` harness; see `bdk_testenv`'s `daemon` feature.
+#![cfg(daemon_tests)]
+
 use bdk_chain::{
     bitcoin::{hashes::Hash, Address, Amount, ScriptBuf, WScriptHash},
     local_chain::LocalChain,

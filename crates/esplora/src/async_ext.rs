@@ -553,7 +553,8 @@ where
     Ok(update)
 }
 
-#[cfg(test)]
+// Needs the `bitcoind` + `electrs` harness; see `bdk_testenv`'s `daemon` feature.
+#[cfg(all(test, daemon_tests))]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod test {
     use std::{collections::BTreeSet, time::Duration};

@@ -26,8 +26,9 @@ bdk_testenv = { path = "." }
 
 [features]
 default = ["std"]
-# The `bitcoind` + `electrs` regtest harness. Off by default because it pulls in the upstream
-# `bitcoin` crate, whose types do not unify with the `litecoin` crate this fork is built on.
+# Pulls in the `bitcoind` + `electrs` regtest harness. Off by default because it depends on the
+# upstream `bitcoin` crate, whose types do not unify with the `litecoin` crate this fork is built
+# on. The harness code also needs the `daemon_tests` cfg; see src/lib.rs.
 daemon = ["std", "dep:electrsd"]
 download = ["daemon", "electrsd/bitcoind_download", "electrsd/bitcoind_28_2", "electrsd/esplora_a33e97e1"]
 std = ["bdk_chain/std", "bitcoin/rand-std", "anyhow/std"]

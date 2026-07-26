@@ -1,3 +1,6 @@
+// Needs the `bitcoind` + `electrs` harness; see `bdk_testenv`'s `daemon` feature.
+#![cfg(daemon_tests)]
+
 use bdk_chain::bitcoin::{Address, Amount};
 use bdk_chain::local_chain::LocalChain;
 use bdk_chain::spk_client::{FullScanRequest, SyncRequest};

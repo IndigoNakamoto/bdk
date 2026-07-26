@@ -6,9 +6,11 @@ members = [
     "crates/file_store",
     "crates/electrum",
     "crates/esplora",
-    "crates/bitcoind_rpc",
     "crates/testenv",
 ]
+# `crates/bitcoind_rpc` is not part of this fork yet: it needs a Litecoin build of
+# `bitcoincore-rpc`, which does not exist for the 0.19 series. See PORTING.md.
+exclude = ["crates/bitcoind_rpc"]
 
 [workspace.package]
 authors = ["Bitcoin Dev Kit Developers"]

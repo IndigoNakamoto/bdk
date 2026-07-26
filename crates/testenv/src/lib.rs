@@ -4,13 +4,16 @@ pub mod utils;
 
 pub use anyhow;
 
-/// A regtest environment running `bitcoind` with an `electrs` instance connected to it.
-///
-/// This is gated behind the non-default `daemon` feature: it drives Bitcoin Core through
-/// `electrsd`, which depends on the upstream `bitcoin` crate rather than `litecoin`, so its types
-/// do not unify with the rest of this fork. It stays available for upstream merges but cannot be
-/// used for Litecoin testing until a `litecoind` + `electrs-ltc` harness replaces it.
-#[cfg(feature = "daemon")]
+// A regtest environment running `bitcoind` with an `electrs` instance connected to it.
+//
+// This drives Bitcoin Core through `electrsd`, which depends on the upstream `bitcoin` crate
+// rather than `litecoin`, so its types do not unify with the rest of this fork and it does not
+// currently compile. It is kept in tree so that upstream merges stay clean, and will come back
+// once a `litecoind` + `electrs-ltc` harness replaces it.
+//
+// Building it takes two switches: the `daemon` feature pulls in `electrsd`, and the
+// `daemon_tests` cfg compiles the code. Splitting them keeps `--all-features` green.
+#[cfg(all(feature = "daemon", daemon_tests))]
 mod daemon;
-#[cfg(feature = "daemon")]
+#[cfg(all(feature = "daemon", daemon_tests))]
 pub use daemon::*;
