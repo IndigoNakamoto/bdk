@@ -1,6 +1,6 @@
 # MWEB architecture ADR (Phase 2+)
 
-Status: **Accepted** (2026-07-26); Phase 5 peg-in/out (no Core MWEB key custody) landed.  
+Status: **Accepted** (2026-07-26); Phase 6 minimal unified balance/send facade landed.  
 Based on Gemini deep research post Phase 0–1; supersedes embedding Nexus/`lndltc` or gomobile-`mwebd` as the BDK library backend.
 
 ## Decision
@@ -88,9 +88,10 @@ A_i = a·B_i
 
 ## Peg-in / spend / peg-out (summary)
 
-- **Peg-in:** `bdk_mweb::build_pegin` authors stealth outs + peg-in kernel (`kernel_id` = v9 program); wallet PSBT + `attach_mweb_tx`. See [`MWEB_PEGIN.md`](MWEB_PEGIN.md).
-- **MWEB→MWEB:** `MwebTxBuilder` (Output/Input/Kernel::Create + offsets); empty vin/vout Litecoin tx with `mw_tx`; no `IndexedTxGraph`.
-- **Peg-out:** `MwebTxBuilder::add_pegout` + peg-out kernel; miner HogEx pays watched transparent SPKs (Phase 0 filter still applies to HogAddr).
+- **Peg-in:** `bdk_mweb::build_pegin` / wallet `prepare_mweb_pegin` → PSBT + `attach_mweb_tx`. See [`MWEB_PEGIN.md`](MWEB_PEGIN.md).
+- **MWEB→MWEB:** `Wallet::build_mweb_send` → `MwebTxBuilder`; empty vin/vout Litecoin tx with `mw_tx`; no `IndexedTxGraph`.
+- **Peg-out:** `Wallet::build_mweb_pegout` → peg-out kernel; miner HogEx pays watched transparent SPKs.
+- **Balance:** `Wallet::balance_combined(&MwebCoinDatabase)` — caller still owns the MWEB DB.
 
 ## Roadmap
 
@@ -99,10 +100,10 @@ A_i = a·B_i
 | **2** | `bdk_mweb` + FFI façade + Core-compatible stealth addresses | Unit vectors + Core seed parity |
 | **3** | `MwebCoinDatabase` + Core `RewindOutput` receive scan | Core→BDK MWEB receive on regtest |
 | **4** | MWEB spend (`MwebTxBuilder`) | litecoind accepts BDK MWEB→MWEB tx |
-| **5** (this) | Peg-in/out without Core key custody | Transparent↔MWEB round-trip |
-| **6** | Unified balance / send API | E2E blended wallet flows |
+| **5** | Peg-in/out without Core key custody | Transparent↔MWEB round-trip |
+| **6** (this) | Unified balance / send API (minimal facade) | E2E blended wallet flows |
 
-### Phase 3–5 notes
+### Phase 3–6 notes
 
 - Receive scan implements Litecoin Core `Keychain::RewindOutput` (LIP-0004 §7 as shipped), not a
   full LIP-0006 P2P client. Wire input today is decoded `mw_tx` bodies. LIP-0006 `getmwebutxos` /
@@ -111,7 +112,11 @@ A_i = a·B_i
 - Spend authors sorted inputs/outputs (Core `Transaction::Create`), change at address index `0`,
   fee (+ optional peg-in / peg-out) kernel with stealth excess.
 - Phase 5: `kernel_id` = Core `Kernel::GetHash`; `build_pegin` / `add_pegout`; regtest round-trip
-  without Core holding MWEB keys. Unified balance remains Phase 6.
+  without Core holding MWEB keys.
+- Phase 6: **minimal facade** — `CombinedBalance`, `prepare_mweb_pegin` / `build_mweb_send` /
+  `build_mweb_pegout` on `Wallet` (feature `mweb`). Callers still own `MwebCoinDatabase` (no
+  wallet-persisted MWEB store). No automatic domain routing in transparent `build_tx`.
+  Wallet-owned persistence remains a possible post-6 follow-on; LIP-0006 still deferred.
 
 ## False paths
 

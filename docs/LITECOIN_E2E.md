@@ -130,15 +130,15 @@ See [`MWEB_PEGIN.md`](MWEB_PEGIN.md) for the spike vectors and Core-finalize dec
 - **HogAddr (v8) / peg-in (v9)** bridge outs are never indexed as spendable UTXOs; **peg-out**
   p2wpkh/p2tr outs in the same HogEx still credit the wallet when watched.
 - MWEB stealth destinations (`ltcmweb1…` / `tmweb1…`) raise `CreateTxError::MwebPegInRequiresKernel`.
-  Peg-in: `bdk_mweb::build_pegin` + wallet `add_mweb_pegin` / `attach_mweb_tx` (Core finalize still OK).
-- Phase 5 (`bdk_mweb`): **derive**, **rewind/receive**, **MWEB→MWEB spend**, **peg-in**, and
-  **peg-out** without Core holding MWEB keys. Transparent→MWEB→Transparent regtest round-trip
-  available. LIP-0006 P2P sync and unified balance remain deferred
-  (see [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md)).
+  Peg-in: `Wallet::prepare_mweb_pegin` or `build_pegin` + `attach_mweb_tx` (Core finalize still OK).
+- Phase 6: minimal facade — `balance_combined(&MwebCoinDatabase)`, `prepare_mweb_pegin`,
+  `build_mweb_send`, `build_mweb_pegout` (feature `mweb`). Caller owns the MWEB DB. LIP-0006 P2P
+  sync remains deferred (see [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md)).
 
-MWEB spend / peg acceptance (needs `LITECOIND_EXE`):
+MWEB spend / peg / facade acceptance (needs `LITECOIND_EXE`):
 
 ```bash
 cargo test -p bdk_mweb --test core_spend --test core_bulletproof_gate --test core_pegin_pegout_roundtrip
+cargo test -p bdk_wallet --test mweb_facade
 ```
 - HogEx transactions decode and can be ingested; bridge outputs never inflate transparent balance.

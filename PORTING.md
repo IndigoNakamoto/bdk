@@ -110,27 +110,29 @@ The v9 program is a **kernel id** (`Kernel::GetHash`). Phase 1 wallet glue
 (`add_mweb_pegin` / `attach_mweb_tx`) still applies; Phase 5 BDK authors the `mw_tx` body.
 
 - `bdk_mweb::build_pegin` → `FinishedMwebPegin { mw_tx, kernel_id, … }`; wallet
-  `TxBuilder::apply_mweb_pegin` (feature `mweb`) or `add_mweb_pegin` + `mweb_tx` + attach.
-- `MwebTxBuilder::add_pegout` spends owned MWEB coins to a transparent SPK (HogEx credit).
+  `prepare_mweb_pegin` / `TxBuilder::apply_mweb_pegin` (feature `mweb`) or `add_mweb_pegin` + attach.
+- `Wallet::build_mweb_pegout` / `MwebTxBuilder::add_pegout` → HogEx credit.
 - Core `sendtoaddress` finalize remains a supported alternate for peg-in.
 - Empty stealth SPKs raise `CreateTxError::MwebPegInRequiresKernel`.
 
 See [`docs/MWEB_PEGIN.md`](docs/MWEB_PEGIN.md).
 
-### MWEB crypto + receive + spend (Phases 2–5)
+### MWEB crypto + receive + spend + facade (Phases 2–6)
 
 Architecture ADR: [`docs/MWEB_ARCHITECTURE.md`](docs/MWEB_ARCHITECTURE.md).
 
 - Crate [`crates/mweb`](crates/mweb) (`bdk_mweb`): Core-compatible stealth keys
   (`m/0'/100'/{0,1}'` + BLAKE3 `'A'` tweak), `Address::mweb` helpers, `rewind_output` /
   `MwebCoinDatabase`, `MwebTxBuilder` (MWEB→MWEB + peg-out), and `build_pegin`.
+- Wallet feature `mweb`: `balance_combined`, `prepare_mweb_pegin`, `build_mweb_send`,
+  `build_mweb_pegout` — caller still owns `MwebCoinDatabase`.
 - Crypto: Grin/MW `grin_secp256k1zkp` FFI for **675-byte bulletproofs** + schnorr (Elements CT
   rangeproofs rejected). Switch commitments keep Core’s H prefix `0x0b`.
-- Regtest: `cargo test -p bdk_mweb` (seed parity, receive, bulletproof gate, spend, peg round-trip);
+- Regtest: `cargo test -p bdk_mweb` and `cargo test -p bdk_wallet --test mweb_facade`;
   needs `LITECOIND_EXE`.
 - **Not** embedding Nexus/`lndltc` (GPL) or gomobile-`mwebd`. LIP-0006 P2P UTXO sync still deferred.
 
-**Deferred (Phase 6):** Unified transparent + MWEB balance / send API.
+**Deferred (post-6):** Wallet-owned/persisted `MwebCoinDatabase`; LIP-0006 P2P sync.
 
 ## Regtest harness (`litecoind` + `electrs-ltc`)
 
