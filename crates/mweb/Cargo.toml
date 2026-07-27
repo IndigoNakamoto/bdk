@@ -19,17 +19,27 @@ blake3 = { version = "1.5", default-features = false }
 # MW-compatible secp256k1-zkp (bulletproof 675 + schnorrsig/aggsig). Not Elements CT rangeproofs.
 grin_secp256k1zkp = { version = "0.7.15", optional = true, default-features = false, features = ["bullet-proof-sizing"] }
 rand = { version = "0.8", default-features = false, features = ["std"] }
+serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
+bdk_core = { path = "../core", version = "0.6.2", optional = true, default-features = false }
 
 [dev-dependencies]
 bitcoin = { package = "litecoin", version = "0.32.8-rc.1", default-features = false, features = ["std", "rand-std"] }
 hex-conservative = { version = "0.2", features = ["alloc"] }
-# For fixture hex decode in unit tests (`bitcoin::hex`).
-# litecoin re-exports hex via the `hex` module when `std` is on.
 serde_json = "1"
 bdk_testenv = { path = "../testenv", features = ["litecoin-daemon"] }
+bdk_file_store = { path = "../file_store", version = "0.22.0" }
+tempfile = "3"
 
 [features]
 default = ["std", "zkp"]
-std = ["bitcoin/std", "blake3/std"]
+std = ["bitcoin/std", "blake3/std", "bdk_core?/std"]
 # Grin/Litecoin MW secp256k1-zkp (bulletproofs + schnorr). Required for spend authoring.
 zkp = ["dep:grin_secp256k1zkp"]
+# Serde for MwebCoin (and ChangeSet when combined with `persist`).
+serde = ["dep:serde", "bitcoin/serde"]
+# Parallel persistence: serde + bdk_core::Merge ChangeSet for file_store / SQLite-beside-wallet.
+persist = ["serde", "dep:bdk_core"]
+
+[[test]]
+name = "persist_filestore"
+required-features = ["persist"]

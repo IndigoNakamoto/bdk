@@ -1,8 +1,8 @@
 //! MWEB (MimbleWimble Extension Blocks) support for Litecoin BDK.
 //!
-//! Phase 5: stealth keys, receive scan, MWEB→MWEB spend, and peg-in/out authoring
-//! without Core key custody. LIP-0006 P2P sync remains deferred — see
-//! `docs/MWEB_ARCHITECTURE.md`.
+//! Stealth keys, receive scan, MWEB→MWEB spend, peg-in/out authoring, and (with
+//! feature `persist`) a parallel `ChangeSet` for coin persistence. LIP-0006 P2P
+//! sync remains deferred — see `docs/MWEB_ARCHITECTURE.md`.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
@@ -11,15 +11,21 @@
 extern crate alloc;
 
 pub mod address;
+#[cfg(feature = "persist")]
+pub mod changeset;
 pub mod coin_db;
 pub mod crypto;
 pub mod error;
 pub mod hash;
 pub mod keys;
 pub mod scan;
+#[cfg(feature = "serde")]
+mod serde_util;
 pub mod tx_builder;
 
 pub use address::{is_mweb_address, parse_mweb_address, receive_address};
+#[cfg(feature = "persist")]
+pub use changeset::ChangeSet;
 pub use coin_db::{MwebCoin, MwebCoinDatabase};
 pub use error::Error;
 pub use keys::{address_index_tweak, master_keys_from_seed, MasterKeyScheme, MasterKeys};

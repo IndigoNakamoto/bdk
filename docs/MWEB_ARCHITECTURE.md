@@ -1,6 +1,6 @@
 # MWEB architecture ADR (Phase 2+)
 
-Status: **Accepted** (2026-07-26); Phase 6 minimal unified balance/send facade landed.  
+Status: **Accepted** (2026-07-26); Phase 6 facade + parallel MWEB coin persist landed.  
 Based on Gemini deep research post Phase 0–1; supersedes embedding Nexus/`lndltc` or gomobile-`mwebd` as the BDK library backend.
 
 ## Decision
@@ -108,15 +108,19 @@ A_i = a·B_i
 - Receive scan implements Litecoin Core `Keychain::RewindOutput` (LIP-0004 §7 as shipped), not a
   full LIP-0006 P2P client. Wire input today is decoded `mw_tx` bodies. LIP-0006 `getmwebutxos` /
   leafset sync remains the future light-client transport.
-- Coins live in in-memory `MwebCoinDatabase` only — never in transparent `IndexedTxGraph`.
+- Coins live in `MwebCoinDatabase` — never in transparent `IndexedTxGraph`.
 - Spend authors sorted inputs/outputs (Core `Transaction::Create`), change at address index `0`,
   fee (+ optional peg-in / peg-out) kernel with stealth excess.
 - Phase 5: `kernel_id` = Core `Kernel::GetHash`; `build_pegin` / `add_pegout`; regtest round-trip
   without Core holding MWEB keys.
 - Phase 6: **minimal facade** — `CombinedBalance`, `prepare_mweb_pegin` / `build_mweb_send` /
-  `build_mweb_pegout` on `Wallet` (feature `mweb`). Callers still own `MwebCoinDatabase` (no
-  wallet-persisted MWEB store). No automatic domain routing in transparent `build_tx`.
-  Wallet-owned persistence remains a possible post-6 follow-on; LIP-0006 still deferred.
+  `build_mweb_pegout` on `Wallet` (feature `mweb`). Callers still own `MwebCoinDatabase`.
+  No automatic domain routing in transparent `build_tx`.
+- **Parallel persist** (feature `persist` on `bdk_mweb`): serde/`Merge` `ChangeSet` staged on
+  `MwebCoinDatabase`, appendable via `bdk_file_store::Store` beside the wallet. Not folded into
+  `Wallet::ChangeSet`. Secrets (`blind`, `shared_secret`, `spend_key`) are spend-equivalent —
+  apps must encrypt at rest. SQLite-beside-wallet and wallet-owned DB remain follow-ons;
+  LIP-0006 still deferred.
 
 ## False paths
 
