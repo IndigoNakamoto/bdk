@@ -16,16 +16,20 @@ workspace = true
 [dependencies]
 bitcoin = { package = "litecoin", version = "0.32.8-rc.1", default-features = false }
 blake3 = { version = "1.5", default-features = false }
-secp256k1-zkp = { version = "0.11.0", default-features = false, optional = true }
+# MW-compatible secp256k1-zkp (bulletproof 675 + schnorrsig/aggsig). Not Elements CT rangeproofs.
+grin_secp256k1zkp = { version = "0.7.15", optional = true, default-features = false, features = ["bullet-proof-sizing"] }
+rand = { version = "0.8", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 bitcoin = { package = "litecoin", version = "0.32.8-rc.1", default-features = false, features = ["std", "rand-std"] }
-hex-conservative = "0.2"
+hex-conservative = { version = "0.2", features = ["alloc"] }
+# For fixture hex decode in unit tests (`bitcoin::hex`).
+# litecoin re-exports hex via the `hex` module when `std` is on.
 serde_json = "1"
 bdk_testenv = { path = "../testenv", features = ["litecoin-daemon"] }
 
 [features]
 default = ["std", "zkp"]
-std = ["bitcoin/std", "blake3/std", "secp256k1-zkp?/std", "secp256k1-zkp?/rand-std"]
-# Elements secp256k1-zkp façade (Phase 2 smoke tests). Phase 4 may switch to Core-vendored FFI.
-zkp = ["dep:secp256k1-zkp"]
+std = ["bitcoin/std", "blake3/std"]
+# Grin/Litecoin MW secp256k1-zkp (bulletproofs + schnorr). Required for spend authoring.
+zkp = ["dep:grin_secp256k1zkp"]

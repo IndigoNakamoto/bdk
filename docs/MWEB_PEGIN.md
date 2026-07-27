@@ -1,4 +1,4 @@
-# MWEB peg-in (Phase 1 spike)
+# MWEB peg-in
 
 Captured against Litecoin Core **v0.21.5.5** on regtest (`setup_mweb_chain` style: mine to height 431, then peg-in).
 
@@ -10,7 +10,7 @@ Captured against Litecoin Core **v0.21.5.5** on regtest (`setup_mweb_chain` styl
 2. Creates a **witness version 9** output (`OP_9` + 32-byte program) whose value is the peg-in amount.
 3. Carries an **`mw_tx`** body whose peg-in kernel id **equals** that 32-byte program.
 
-Core labels the script type `witness_mweb_pegin`. Consensus helper: `CScript::IsMWEBPegin` → program is the peg-in `kernel_id`.
+Core labels the script type `witness_mweb_pegin`. Consensus helper: `CScript::IsMWEBPegin` → program is the peg-in `kernel_id` (= Core `Kernel::GetHash` / untagged BLAKE3 of the serialized kernel).
 
 ### Regtest vector (abbreviated)
 
@@ -23,37 +23,31 @@ Core labels the script type `witness_mweb_pegin`. Consensus helper: `CScript::Is
 
 Full decoded sample: [`mweb_pegin_regtest.decoded.json`](mweb_pegin_regtest.decoded.json). Raw hex: [`mweb_pegin_regtest.hex`](mweb_pegin_regtest.hex).
 
-Core’s `sendtoaddress(<mweb>, X)` typically pegs the **selected transparent input(s)** into MWEB (v9 value ≈ input − fee) and allocates `X` to the stealth address as an MWEB output, with MWEB change as additional `ismweb` vouts in `decoderawtransaction`.
-
 ## Maturity
 
 Peg-ins are only safe to spend inside MWEB after **6 confirmations** (Litecoin Core / LIP guidance). Regtest acceptance mines ≥6 blocks after broadcast.
 
-## Can pure BDK author a peg-in?
+## Authoring (Phase 5)
 
-**No — not from the stealth address + amount alone.**
+**BDK can author the peg-in body** via `bdk_mweb::build_pegin` (bulletproofs + kernel signing). Order:
 
-The 32-byte program is the **kernel id** of a peg-in kernel inside `mw_tx`. Building that kernel requires MWEB wallet crypto (commitments, range proofs / Bulletproofs, kernel excess signatures). `rust-litecoin` can **decode** `mw_tx` but does not author kernels.
+1. `FinishedMwebPegin = build_pegin(...)` → `kernel_id`, `pegin_amount`, `mw_tx`
+2. Transparent coin selection: `TxBuilder::apply_mweb_pegin(&pegin)` (feature `mweb`) or
+   `add_mweb_pegin(kernel_id, amount)` + `mweb_tx(mw_tx)`
+3. `finish_mweb_pegin` → sign PSBT → `extract_tx` → `attach_mweb_tx` → broadcast
 
-### Decision (locked)
+BIP174 still cannot carry `mw_tx`; the body stays aside until extract. Paying a stealth address with an empty SPK still yields **`MwebPegInRequiresKernel`**.
 
-Implement a **Core / mwebd finalize** path:
+### Alternate: Core / mwebd finalize
 
-1. BDK performs transparent **coin selection** (and can construct the v9 `scriptPubKey` once a `kernel_id` is known).
-2. **litecoind** (or mwebd) authors the kernel + `mw_tx` and produces the broadcastable transaction (today: `sendtoaddress` / wallet send to an `mweb` address, optionally with coin control).
-3. TxBuilder exposes:
-   - `add_mweb_pegin(kernel_id, amount)` — transparent half when a finalizer already supplied a kernel id.
-   - `mweb_tx(...)` + `finish_mweb_pegin()` — keep the body aside (BIP174 PSBTs reject MWEB/HogEx).
-   - After `sign` / `extract_tx`, call `attach_mweb_tx` before broadcast.
-   - Paying a stealth address with an empty SPK yields **`MwebPegInRequiresKernel`**.
-
-Phase 2+ (`bdk_mweb` scan/spend, Bulletproofs, LIP-0006) stays out of scope. Prior art: [ltcmweb/mwebd](https://github.com/ltcmweb/mwebd).
+litecoind `sendtoaddress(<mweb>, X)` (or mwebd) remains a valid finalizer when you do not want to author the body in-process. The Phase 1 TxBuilder APIs still accept an externally supplied `kernel_id` + `mw_tx`.
 
 ## Regtest activation recipe
 
 ```text
 generatetoaddress 431 <addr>   # pre-MWEB tip
-sendtoaddress <tmweb1…> <amt>  # peg-in (mempool)
+# BDK: build_pegin + transparent v9 + attach_mweb_tx + sendrawtransaction
+# (or: sendtoaddress <tmweb1…> <amt> for Core finalize)
 generatetoaddress 1 <addr>     # height 432, MWEB active + confirms peg-in
 generatetoaddress 5 <addr>     # ≥6 confirmations total
 ```

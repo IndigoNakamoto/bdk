@@ -14,9 +14,6 @@ use bitcoin::{Network, NetworkKind};
 
 use crate::error::Error;
 
-/// Tag byte `EHashTag::ADDRESS` from Core `Hasher.h`.
-const TAG_ADDRESS: u8 = b'A';
-
 /// Which BIP32 layout to use for master scan/spend keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MasterKeyScheme {
@@ -134,8 +131,9 @@ impl MasterKeys {
 
 /// Core `Hasher(EHashTag::ADDRESS).Append(index).Append(scan_secret)`.
 pub fn address_index_tweak(scan_secret: &SecretKey, index: u32) -> [u8; 32] {
+    use crate::hash::HashTag;
     let mut hasher = blake3::Hasher::new();
-    hasher.update(&[TAG_ADDRESS]);
+    hasher.update(&[HashTag::Address as u8]);
     hasher.update(&index.to_le_bytes());
     hasher.update(&scan_secret.secret_bytes());
     *hasher.finalize().as_bytes()

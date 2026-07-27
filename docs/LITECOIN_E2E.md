@@ -130,7 +130,15 @@ See [`MWEB_PEGIN.md`](MWEB_PEGIN.md) for the spike vectors and Core-finalize dec
 - **HogAddr (v8) / peg-in (v9)** bridge outs are never indexed as spendable UTXOs; **peg-out**
   p2wpkh/p2tr outs in the same HogEx still credit the wallet when watched.
 - MWEB stealth destinations (`ltcmweb1…` / `tmweb1…`) raise `CreateTxError::MwebPegInRequiresKernel`.
-  Peg-in MVP: `add_mweb_pegin` + finalizer `mw_tx` via litecoind/mwebd (not pure BDK).
-- Phase 2 (`bdk_mweb`) can **derive** Core-compatible MWEB addresses; **scan/receive/spend** inside
-  MWEB is not available yet (see [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md)).
+  Peg-in: `bdk_mweb::build_pegin` + wallet `add_mweb_pegin` / `attach_mweb_tx` (Core finalize still OK).
+- Phase 5 (`bdk_mweb`): **derive**, **rewind/receive**, **MWEB→MWEB spend**, **peg-in**, and
+  **peg-out** without Core holding MWEB keys. Transparent→MWEB→Transparent regtest round-trip
+  available. LIP-0006 P2P sync and unified balance remain deferred
+  (see [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md)).
+
+MWEB spend / peg acceptance (needs `LITECOIND_EXE`):
+
+```bash
+cargo test -p bdk_mweb --test core_spend --test core_bulletproof_gate --test core_pegin_pegout_roundtrip
+```
 - HogEx transactions decode and can be ingested; bridge outputs never inflate transparent balance.

@@ -104,26 +104,33 @@ p2wpkh/p2tr) that are real spendable UTXOs. The indexer filters only MWEB **brid
 
 Helper: `bdk_chain::is_mweb_bridge_output`. See also [`docs/MWEB_PEGIN.md`](docs/MWEB_PEGIN.md).
 
-### Peg-in MVP (Phase 1)
+### Peg-in / peg-out (Phases 1 + 5)
 
-Pure BDK cannot author a peg-in from a stealth address alone: the v9 program is a **kernel id** and
-requires an `mw_tx` body (Bulletproofs / kernel signing). Decision: **finalize via litecoind/mwebd**.
+The v9 program is a **kernel id** (`Kernel::GetHash`). Phase 1 wallet glue
+(`add_mweb_pegin` / `attach_mweb_tx`) still applies; Phase 5 BDK authors the `mw_tx` body.
 
-Wallet API (`bdk_wallet`): `TxBuilder::add_mweb_pegin` + `mweb_tx` + `finish_mweb_pegin`, then
-`attach_mweb_tx` after PSBT sign/extract (BIP174 rejects MWEB bodies). Empty stealth SPKs raise
-`CreateTxError::MwebPegInRequiresKernel`.
+- `bdk_mweb::build_pegin` → `FinishedMwebPegin { mw_tx, kernel_id, … }`; wallet
+  `TxBuilder::apply_mweb_pegin` (feature `mweb`) or `add_mweb_pegin` + `mweb_tx` + attach.
+- `MwebTxBuilder::add_pegout` spends owned MWEB coins to a transparent SPK (HogEx credit).
+- Core `sendtoaddress` finalize remains a supported alternate for peg-in.
+- Empty stealth SPKs raise `CreateTxError::MwebPegInRequiresKernel`.
 
-### MWEB crypto foundation (Phase 2)
+See [`docs/MWEB_PEGIN.md`](docs/MWEB_PEGIN.md).
+
+### MWEB crypto + receive + spend (Phases 2–5)
 
 Architecture ADR: [`docs/MWEB_ARCHITECTURE.md`](docs/MWEB_ARCHITECTURE.md).
 
-- New crate [`crates/mweb`](crates/mweb) (`bdk_mweb`): Core-compatible stealth keys
-  (`m/0'/100'/{0,1}'` + BLAKE3 `'A'` tweak), `Address::mweb` helpers, Elements `secp256k1-zkp`
-  FFI smoke tests.
-- **Not** embedding Nexus/`lndltc` (GPL) or gomobile-`mwebd`.
+- Crate [`crates/mweb`](crates/mweb) (`bdk_mweb`): Core-compatible stealth keys
+  (`m/0'/100'/{0,1}'` + BLAKE3 `'A'` tweak), `Address::mweb` helpers, `rewind_output` /
+  `MwebCoinDatabase`, `MwebTxBuilder` (MWEB→MWEB + peg-out), and `build_pegin`.
+- Crypto: Grin/MW `grin_secp256k1zkp` FFI for **675-byte bulletproofs** + schnorr (Elements CT
+  rangeproofs rejected). Switch commitments keep Core’s H prefix `0x0b`.
+- Regtest: `cargo test -p bdk_mweb` (seed parity, receive, bulletproof gate, spend, peg round-trip);
+  needs `LITECOIND_EXE`.
+- **Not** embedding Nexus/`lndltc` (GPL) or gomobile-`mwebd`. LIP-0006 P2P UTXO sync still deferred.
 
-**Deferred (Phase 3+):** `MwebCoinDatabase`, LIP-0006 scan, MWEB spend, peg-in/out without Core
-custody, unified balance API.
+**Deferred (Phase 6):** Unified transparent + MWEB balance / send API.
 
 ## Regtest harness (`litecoind` + `electrs-ltc`)
 

@@ -1,5 +1,6 @@
 //! Errors for `bdk_mweb`.
 
+use alloc::string::String;
 use core::fmt;
 
 /// Errors produced by MWEB key derivation, addressing, or crypto helpers.
@@ -13,6 +14,14 @@ pub enum Error {
     InvalidTweak,
     /// Feature `zkp` is disabled.
     ZkpDisabled,
+    /// Transaction builder / amount mismatch.
+    InsufficientFunds,
+    /// Missing spend key or blind on an input coin.
+    MissingCoinSecrets,
+    /// Recipient is not an MWEB stealth address.
+    NotMwebAddress,
+    /// Consensus / FFI crypto failure.
+    Crypto(String),
 }
 
 impl fmt::Display for Error {
@@ -22,6 +31,10 @@ impl fmt::Display for Error {
             Self::Secp256k1(e) => write!(f, "secp256k1 error: {e}"),
             Self::InvalidTweak => write!(f, "invalid address-index tweak"),
             Self::ZkpDisabled => write!(f, "bdk_mweb built without the `zkp` feature"),
+            Self::InsufficientFunds => write!(f, "input amount does not cover recipients + fee"),
+            Self::MissingCoinSecrets => write!(f, "MWEB coin missing spend_key or blind"),
+            Self::NotMwebAddress => write!(f, "address is not an MWEB stealth address"),
+            Self::Crypto(e) => write!(f, "MWEB crypto error: {e}"),
         }
     }
 }

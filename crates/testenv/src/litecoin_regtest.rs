@@ -16,8 +16,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
+use bdk_chain::bitcoin::blockdata::mimblewimble;
 use bdk_chain::bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
 use bdk_chain::bitcoin::{Address, Amount, Block, BlockHash, Network, Transaction, Txid};
+use bdk_chain::mweb_pegin_script_pubkey;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -180,11 +182,33 @@ impl RpcClient {
 
     pub fn send_raw_transaction(&self, tx: &Transaction) -> Result<Txid> {
         let hex = serialize_hex(tx);
-        let v = self.call("sendrawtransaction", json!([hex]))?;
+        // maxfeerate=0 disables the absurd-fee check (MWEB weight makes sat/vB noisy).
+        let v = self.call("sendrawtransaction", json!([hex, 0.0]))?;
         let s = v
             .as_str()
             .ok_or_else(|| anyhow!("sendrawtransaction returned non-string"))?;
         Ok(s.parse()?)
+    }
+
+    /// `testmempoolaccept` — returns `(allowed, reject-reason)`.
+    ///
+    /// Passes `maxfeerate=0` so MWEB weight/fee-rate edge cases do not trip the
+    /// default absurbly-low-vsize max-fee check during acceptance tests.
+    pub fn test_mempool_accept(&self, tx: &Transaction) -> Result<(bool, Option<String>)> {
+        let hex = serialize_hex(tx);
+        let v = self.call("testmempoolaccept", json!([[hex], 0.0]))?;
+        let arr = v
+            .as_array()
+            .ok_or_else(|| anyhow!("testmempoolaccept returned non-array"))?;
+        let first = arr
+            .first()
+            .ok_or_else(|| anyhow!("testmempoolaccept empty result"))?;
+        let allowed = first["allowed"].as_bool().unwrap_or(false);
+        let reason = first
+            .get("reject-reason")
+            .and_then(|r| r.as_str())
+            .map(|s| s.to_string());
+        Ok((allowed, reason))
     }
 
     pub fn get_raw_transaction(&self, txid: &Txid) -> Result<Transaction> {
@@ -299,6 +323,66 @@ impl RpcClient {
             .as_str()
             .ok_or_else(|| anyhow!("signed tx missing hex"))?;
         Ok(deserialize_hex(signed_hex)?)
+    }
+
+    /// Fund + sign a transparent v9 peg-in skeleton and attach a pre-authored `mw_tx`.
+    pub fn fund_sign_attach_pegin(
+        &self,
+        kernel_id: [u8; 32],
+        pegin_amount: Amount,
+        mw_tx: mimblewimble::Transaction,
+    ) -> Result<Transaction> {
+        use bdk_chain::bitcoin::absolute::LockTime;
+        use bdk_chain::bitcoin::transaction::{OutPoint, Sequence, TxIn, TxOut, Version};
+        use bdk_chain::bitcoin::Witness;
+
+        let fee = Amount::from_sat(10_000);
+        let unspent = self.list_unspent()?;
+        let utxo = unspent
+            .iter()
+            .find(|u| u.amount > pegin_amount + fee)
+            .ok_or_else(|| anyhow!("no UTXO large enough for peg-in + fee"))?;
+        let change_addr = self.get_new_address()?;
+        let change = utxo.amount - pegin_amount - fee;
+        let pegin_spk = mweb_pegin_script_pubkey(&kernel_id);
+
+        let unsigned = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint {
+                    txid: utxo.txid,
+                    vout: utxo.vout,
+                },
+                script_sig: Default::default(),
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+                witness: Witness::default(),
+            }],
+            output: vec![
+                TxOut {
+                    value: pegin_amount,
+                    script_pubkey: pegin_spk,
+                },
+                TxOut {
+                    value: change,
+                    script_pubkey: change_addr.script_pubkey(),
+                },
+            ],
+            mw_tx: None,
+            is_hog_ex: false,
+        };
+        let hex = serialize_hex(&unsigned);
+        let signed = self.call("signrawtransactionwithwallet", json!([hex]))?;
+        if !signed["complete"].as_bool().unwrap_or(false) {
+            bail!("signrawtransactionwithwallet incomplete: {signed}");
+        }
+        let signed_hex = signed["hex"]
+            .as_str()
+            .ok_or_else(|| anyhow!("signed tx missing hex"))?;
+        let mut tx: Transaction = deserialize_hex(signed_hex)?;
+        tx.mw_tx = Some(mw_tx);
+        self.send_raw_transaction(&tx)?;
+        Ok(tx)
     }
 
     pub fn invalidate_block(&self, hash: &BlockHash) -> Result<()> {
@@ -435,6 +519,20 @@ impl LitecoinNodeEnv {
         let txid = self.rpc.send_to_address(mweb_address, amount)?;
         let hex = self.rpc.get_wallet_transaction_hex(&txid)?;
         Ok(deserialize_hex(&hex)?)
+    }
+
+    /// Broadcast a BDK-authored peg-in: fund/sign transparent v9 half, attach `mw_tx`.
+    ///
+    /// Does **not** use Core `sendtoaddress` for the MWEB body — `mw_tx` must already be
+    /// authored (e.g. `bdk_mweb::build_pegin`).
+    pub fn broadcast_bdk_pegin(
+        &self,
+        kernel_id: [u8; 32],
+        pegin_amount: Amount,
+        mw_tx: mimblewimble::Transaction,
+    ) -> Result<Transaction> {
+        self.rpc
+            .fund_sign_attach_pegin(kernel_id, pegin_amount, mw_tx)
     }
 
     pub fn mine_blocks(&self, n: u32, address: &Address) -> Result<Vec<BlockHash>> {
