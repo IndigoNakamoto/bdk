@@ -26,6 +26,8 @@ pub mod lip0006;
 pub mod lip0006_tcp;
 #[cfg(feature = "lip0006")]
 pub mod p2p;
+#[cfg(feature = "lip0006")]
+pub mod pmmr;
 pub mod scan;
 #[cfg(feature = "serde")]
 mod serde_util;
@@ -36,7 +38,7 @@ pub mod tx_builder;
 pub use address::{is_mweb_address, parse_mweb_address, receive_address};
 #[cfg(feature = "persist")]
 pub use changeset::ChangeSet;
-pub use coin_db::{MwebBalance, MwebCoin, MwebCoinDatabase};
+pub use coin_db::{MwebBalance, MwebCoin, MwebCoinDatabase, MWEB_PEGIN_MATURITY};
 #[cfg(feature = "encrypt")]
 pub use encrypt::{open, seal};
 #[cfg(all(feature = "encrypt-changeset"))]

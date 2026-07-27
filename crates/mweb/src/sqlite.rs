@@ -27,6 +27,10 @@ CREATE TABLE bdk_mweb_coins (
 ) STRICT;
 ";
 
+const V1: &str = "
+ALTER TABLE bdk_mweb_coins ADD COLUMN is_pegin INTEGER NOT NULL DEFAULT 0;
+";
+
 fn init_schemas_table(db_tx: &Transaction<'_>) -> rusqlite::Result<()> {
     db_tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS bdk_schemas (
@@ -116,6 +120,7 @@ fn read_coin(row: &rusqlite::Row<'_>) -> rusqlite::Result<MwebCoin> {
         block_height: row
             .get::<_, Option<i64>>("block_height")?
             .map(|h| h as u32),
+        is_pegin: row.get::<_, i64>("is_pegin").unwrap_or(0) != 0,
     })
 }
 
@@ -124,10 +129,10 @@ fn upsert_coin(db_tx: &Transaction<'_>, coin: &MwebCoin, spent: bool) -> rusqlit
         &format!(
             "REPLACE INTO {COINS_TABLE} (
                 output_id, commitment, amount, address_index,
-                blind, shared_secret, spend_key, block_height, spent
+                blind, shared_secret, spend_key, block_height, spent, is_pegin
             ) VALUES (
                 :output_id, :commitment, :amount, :address_index,
-                :blind, :shared_secret, :spend_key, :block_height, :spent
+                :blind, :shared_secret, :spend_key, :block_height, :spent, :is_pegin
             )"
         ),
         named_params! {
@@ -140,6 +145,7 @@ fn upsert_coin(db_tx: &Transaction<'_>, coin: &MwebCoin, spent: bool) -> rusqlit
             ":spend_key": coin.spend_key.as_ref().map(blob32),
             ":block_height": coin.block_height.map(|h| h as i64),
             ":spent": if spent { 1i64 } else { 0i64 },
+            ":is_pegin": if coin.is_pegin { 1i64 } else { 0i64 },
         },
     )?;
     Ok(())
@@ -148,7 +154,7 @@ fn upsert_coin(db_tx: &Transaction<'_>, coin: &MwebCoin, spent: bool) -> rusqlit
 impl ChangeSet {
     /// Create / migrate MWEB SQLite tables.
     pub fn init_sqlite_tables(db_tx: &Transaction<'_>) -> rusqlite::Result<()> {
-        migrate_schema(db_tx, SCHEMA_NAME, &[V0])
+        migrate_schema(db_tx, SCHEMA_NAME, &[V0, V1])
     }
 
     /// Load the full coin table into a changeset.
@@ -156,7 +162,7 @@ impl ChangeSet {
         let mut cs = ChangeSet::default();
         let mut stmt = db_tx.prepare(&format!(
             "SELECT output_id, commitment, amount, address_index, blind, shared_secret,
-                    spend_key, block_height, spent FROM {COINS_TABLE}"
+                    spend_key, block_height, spent, is_pegin FROM {COINS_TABLE}"
         ))?;
         let rows = stmt.query_map([], |row| {
             let spent: i64 = row.get("spent")?;

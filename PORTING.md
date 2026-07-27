@@ -144,9 +144,10 @@ Architecture ADR: [`docs/MWEB_ARCHITECTURE.md`](docs/MWEB_ARCHITECTURE.md).
 - **Electrum-first** regtest chain source (`litecoind` + `electrs-ltc`). No regtest Esplora.
 - **Not** embedding Nexus/`lndltc` (GPL) or gomobile-`mwebd`.
 
-**Also landed:** LIP-0006 codecs + `sync_mweb_utxos` / `TcpMwebPeer` (feature `lip0006`,
-trusted-peer MVP + parent_hashes presence check); `bdk_bitcoind_rpc` via vendored
-`bitcoincore-rpc` Litecoin alias.
+**Also landed:** LIP-0006 verified sync (`mwebheader` / leafset_root / PMMR parent_hashes,
+`VerifyMode::HeaderAndPmmr` default) + `sync_mweb_at_tip` / `TcpMwebPeer` (feature
+`lip0006`); peg-in maturity + `disconnect_from` reorg seam; `bdk_bitcoind_rpc` via
+vendored `bitcoincore-rpc` Litecoin alias.
 
 ## Regtest harness (`litecoind` + `electrs-ltc`)
 

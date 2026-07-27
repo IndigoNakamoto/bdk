@@ -59,6 +59,7 @@ mod tests {
             shared_secret: [3; 32],
             spend_key: Some([4; 32]),
             block_height: None,
+            is_pegin: false,
         }
     }
 

@@ -1,8 +1,8 @@
 //! Thin TCP client for LIP-0006 messages against litecoind.
 //!
 //! Performs a minimal `version` / `verack` handshake, then exchanges
-//! `getdata`(MSG_MWEB_LEAFSET) and `getmwebutxos` as raw unknown payloads.
-//! Intended for regtest / trusted peers; not a full Bitcoin P2P stack.
+//! `getdata`(MSG_MWEB_HEADER / MSG_MWEB_LEAFSET) and `getmwebutxos` as raw
+//! unknown payloads. Intended for regtest; prefer [`VerifyMode::HeaderAndPmmr`].
 
 use alloc::vec::Vec;
 use std::io::{Read, Write};
@@ -20,7 +20,10 @@ use bitcoin::Network;
 
 use crate::error::Error;
 use crate::lip0006::MwebUtxoSource;
-use crate::p2p::{mweb_inv, GetMwebUtxos, MwebLeafset, MwebUtxos, MSG_MWEB_LEAFSET};
+use crate::p2p::{
+    mweb_inv, GetMwebUtxos, MwebHeaderMsg, MwebLeafset, MwebUtxos, MSG_MWEB_HEADER,
+    MSG_MWEB_LEAFSET,
+};
 
 /// TCP peer implementing [`MwebUtxoSource`].
 pub struct TcpMwebPeer {
@@ -50,34 +53,47 @@ impl TcpMwebPeer {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
+        // NODE_NETWORK | NODE_WITNESS | NODE_MWEB_LIGHT_CLIENT (1<<23).
+        let services = ServiceFlags::from(
+            u64::from(ServiceFlags::NETWORK)
+                | u64::from(ServiceFlags::WITNESS)
+                | (1u64 << 23),
+        );
         let version = VersionMessage {
-            version: 70016,
-            services: ServiceFlags::NONE,
+            version: 70017,
+            services,
             timestamp: now,
             receiver: Address::new(&([0, 0, 0, 0], 0).into(), ServiceFlags::NONE),
-            sender: Address::new(&([0, 0, 0, 0], 0).into(), ServiceFlags::NONE),
+            sender: Address::new(&([0, 0, 0, 0], 0).into(), services),
             nonce: 0,
             user_agent: "/bdk_mweb:0.1.0/".into(),
             start_height: 0,
-            relay: false,
+            relay: true,
         };
         self.send(NetworkMessage::Version(version))?;
+        let mut saw_version = false;
         let mut saw_verack = false;
-        for _ in 0..8 {
+        for _ in 0..16 {
             let msg = self.recv()?;
             match msg.payload() {
                 NetworkMessage::Version(_) => {
                     self.send(NetworkMessage::Verack)?;
+                    saw_version = true;
                 }
                 NetworkMessage::Verack => {
                     saw_verack = true;
-                    break;
+                }
+                NetworkMessage::Ping(nonce) => {
+                    self.send(NetworkMessage::Pong(*nonce))?;
                 }
                 _ => {}
             }
+            if saw_version && saw_verack {
+                break;
+            }
         }
-        if !saw_verack {
-            return Err(Error::Crypto("p2p handshake: no verack".into()));
+        if !saw_version || !saw_verack {
+            return Err(Error::Crypto("p2p handshake: incomplete version/verack".into()));
         }
         Ok(())
     }
@@ -92,12 +108,29 @@ impl TcpMwebPeer {
     }
 
     fn send_cmd(&mut self, command: &str, payload: &[u8]) -> Result<(), Error> {
+        // Do not use `NetworkMessage::Unknown`: `Vec<u8>` consensus-encoding prefixes a
+        // CompactSize length, which corrupts litecoind's message body. Write the P2P
+        // header + raw payload ourselves.
+        use bitcoin::consensus::Encodable;
+        use bitcoin::hashes::{sha256d, Hash};
         let cmd = bitcoin::p2p::message::CommandString::try_from(command)
             .map_err(|_| Error::Crypto("invalid command string".into()))?;
-        self.send(NetworkMessage::Unknown {
-            command: cmd,
-            payload: payload.to_vec(),
-        })
+        let mut msg = Vec::with_capacity(24 + payload.len());
+        self.magic
+            .consensus_encode(&mut msg)
+            .map_err(|e| Error::Crypto(alloc::format!("magic encode: {e}")))?;
+        cmd.consensus_encode(&mut msg)
+            .map_err(|e| Error::Crypto(alloc::format!("cmd encode: {e}")))?;
+        let len = payload.len() as u32;
+        len.consensus_encode(&mut msg)
+            .map_err(|e| Error::Crypto(alloc::format!("len encode: {e}")))?;
+        let checksum = sha256d::Hash::hash(payload);
+        msg.extend_from_slice(&checksum[..4]);
+        msg.extend_from_slice(payload);
+        self.stream
+            .write_all(&msg)
+            .map_err(|e| Error::Crypto(alloc::format!("p2p write: {e}")))?;
+        Ok(())
     }
 
     fn recv(&mut self) -> Result<RawNetworkMessage, Error> {
@@ -119,16 +152,27 @@ impl TcpMwebPeer {
     }
 
     fn recv_until_cmd(&mut self, want: &str) -> Result<Vec<u8>, Error> {
-        for _ in 0..32 {
+        for _ in 0..64 {
             let msg = self.recv()?;
+            let cmd = msg.command().to_string();
             match msg.payload() {
-                NetworkMessage::Unknown { command, payload } if command.as_ref() == want => {
+                NetworkMessage::Unknown { command, payload }
+                    if command.as_ref() == want || cmd == want =>
+                {
                     return Ok(payload.clone());
                 }
                 NetworkMessage::Ping(nonce) => {
                     self.send(NetworkMessage::Pong(*nonce))?;
                 }
-                _ => {}
+                NetworkMessage::NotFound(inv) => {
+                    return Err(Error::Crypto(alloc::format!(
+                        "p2p: notfound while waiting for {want}: {inv:?}"
+                    )));
+                }
+                // Ignore addr / feefilter / inv / etc.
+                other => {
+                    let _ = other;
+                }
             }
         }
         Err(Error::Crypto(alloc::format!(
@@ -138,6 +182,15 @@ impl TcpMwebPeer {
 }
 
 impl MwebUtxoSource for TcpMwebPeer {
+    fn get_header(&mut self, block_hash: BlockHash) -> Result<MwebHeaderMsg, Error> {
+        let inv: Vec<Inventory> = vec![mweb_inv(MSG_MWEB_HEADER, block_hash)];
+        self.send(NetworkMessage::GetData(inv))?;
+        let payload = self.recv_until_cmd("mwebheader")?;
+        let mut cursor = std::io::Cursor::new(payload);
+        MwebHeaderMsg::consensus_decode(&mut cursor)
+            .map_err(|e| Error::Crypto(alloc::format!("mwebheader decode: {e}")))
+    }
+
     fn get_leafset(&mut self, block_hash: BlockHash) -> Result<MwebLeafset, Error> {
         let inv: Vec<Inventory> = vec![mweb_inv(MSG_MWEB_LEAFSET, block_hash)];
         self.send(NetworkMessage::GetData(inv))?;

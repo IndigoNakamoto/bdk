@@ -107,8 +107,9 @@ A_i = a·B_i
 
 - Receive scan implements Litecoin Core `Keychain::RewindOutput` (LIP-0004 §7 as shipped).
   Wire input may be decoded `mw_tx` bodies or LIP-0006 FULL_UTXO batches via
-  `bdk_mweb::lip0006` (feature `lip0006`: codecs, `sync_mweb_utxos`, `TcpMwebPeer`).
-  MVP security is trusted peer + rewind; full PMMR membership verify remains a follow-on.
+  `bdk_mweb::lip0006` (feature `lip0006`: codecs, `sync_mweb_at_tip`, `TcpMwebPeer`).
+  Default verify mode is `HeaderAndPmmr` (leafset_root + segment parent_hashes vs
+  `output_root`); `VerifyMode::Trusted` remains for scripted/tests.
 - Coins live in `MwebCoinDatabase` — never in transparent `IndexedTxGraph`.
 - Spend authors sorted inputs/outputs (Core `Transaction::Create`), change at address index `0`,
   fee (+ optional peg-in / peg-out) kernel with stealth excess.
@@ -122,7 +123,10 @@ A_i = a·B_i
   Wallet [`MwebStore`] helpers load/persist beside the wallet. Not folded into
   `Wallet::ChangeSet`. Secrets are spend-equivalent — encrypt at rest with feature `encrypt`
   (`seal` / `seal_changeset`); apps own the key.
-- LIP-0006 `getmwebutxos` / leafset P2P sync: see `bdk_mweb::lip0006` (feature `lip0006`).
+- LIP-0006 verified sync: `mwebheader` → `mwebleafset` → batched `mwebutxos` with
+  PMMR checks (`bdk_mweb::pmmr`, feature `lip0006`). Tip seam is `(BlockHash, u32)` —
+  Electrum stays outside the crate. Peg-in maturity = 6 (`MWEB_PEGIN_MATURITY`);
+  reorgs call `MwebStore::disconnect_from(height)`.
 
 ## False paths
 

@@ -2,14 +2,19 @@
 //!
 //! These types are not yet in the published `litecoin` crate `p2p` module. Wire them
 //! here and re-export when upstream adds them.
+//!
+//! **Note:** `mwebutxos` follows litecoind's on-wire layout (`block_hash`, `start_index`,
+//! …), which differs slightly from the LIP-0006 table (litecoind is authoritative for P2P).
 
 use alloc::vec::Vec;
 
-use bitcoin::blockdata::block::BlockHash;
+use bitcoin::blockdata::block::{BlockHash, MwebBlockHeader};
 use bitcoin::blockdata::mimblewimble::Output;
 use bitcoin::consensus::encode::{self, Decodable, Encodable, VarInt};
 use bitcoin::hashes::Hash;
 use bitcoin::io::{self, Read, Write};
+use bitcoin::Transaction;
+use bitcoin::MerkleBlock;
 
 /// `getdata` inventory type for MWEB header (LIP-0006).
 pub const MSG_MWEB_HEADER: u32 = 0x2000_0008;
@@ -41,6 +46,7 @@ impl Encodable for GetMwebUtxos {
         let mut len = 0;
         len += self.block_hash.consensus_encode(w)?;
         len += VarInt(self.start_index).consensus_encode(w)?;
+        // Wire format matches litecoind (uint16 little-endian, same as Bitcoin Serialize).
         len += self.num_requested.consensus_encode(w)?;
         len += self.output_format.consensus_encode(w)?;
         Ok(len)
@@ -67,20 +73,26 @@ pub struct MwebUtxoEntry {
     pub output: Output,
 }
 
-/// `mwebutxos` response (FULL_UTXO path).
+/// `mwebutxos` response (FULL_UTXO path) — litecoind wire layout.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MwebUtxos {
+    /// Snapshot block hash (echoed from the request).
+    pub block_hash: BlockHash,
+    /// Start index echoed from the request.
+    pub start_index: u64,
     /// Serialization format of the UTXOs.
     pub output_format: u8,
     /// UTXOs in this batch.
     pub utxos: Vec<MwebUtxoEntry>,
-    /// Parent hashes for output PMMR membership proofs.
+    /// Parent hashes for output PMMR membership proofs (`proof_hashes` in Core).
     pub parent_hashes: Vec<[u8; 32]>,
 }
 
 impl Encodable for MwebUtxos {
     fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
         let mut len = 0;
+        len += self.block_hash.consensus_encode(w)?;
+        len += VarInt(self.start_index).consensus_encode(w)?;
         len += self.output_format.consensus_encode(w)?;
         len += VarInt(self.utxos.len() as u64).consensus_encode(w)?;
         for entry in &self.utxos {
@@ -97,6 +109,8 @@ impl Encodable for MwebUtxos {
 
 impl Decodable for MwebUtxos {
     fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
+        let block_hash = BlockHash::consensus_decode(r)?;
+        let start_index = VarInt::consensus_decode(r)?.0;
         let output_format = u8::consensus_decode(r)?;
         let n = VarInt::consensus_decode(r)?.0 as usize;
         let mut utxos = Vec::with_capacity(n);
@@ -116,9 +130,42 @@ impl Decodable for MwebUtxos {
             parent_hashes.push(<[u8; 32]>::consensus_decode(r)?);
         }
         Ok(Self {
+            block_hash,
+            start_index,
             output_format,
             utxos,
             parent_hashes,
+        })
+    }
+}
+
+/// `mwebheader` message (BIP37 merkle block + HogEx + MWEB header).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MwebHeaderMsg {
+    /// BIP37 partial merkle tree for the block (includes the HogEx txid).
+    pub merkle: MerkleBlock,
+    /// HogEx (Hogwarts Express) bridge transaction.
+    pub hogex: Transaction,
+    /// MWEB extension-block header at this tip.
+    pub mweb_header: MwebBlockHeader,
+}
+
+impl Encodable for MwebHeaderMsg {
+    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, io::Error> {
+        let mut len = 0;
+        len += self.merkle.consensus_encode(w)?;
+        len += self.hogex.consensus_encode(w)?;
+        len += self.mweb_header.consensus_encode(w)?;
+        Ok(len)
+    }
+}
+
+impl Decodable for MwebHeaderMsg {
+    fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
+        Ok(Self {
+            merkle: MerkleBlock::consensus_decode(r)?,
+            hogex: Transaction::consensus_decode(r)?,
+            mweb_header: MwebBlockHeader::consensus_decode(r)?,
         })
     }
 }
@@ -212,6 +259,7 @@ mod tests {
             output_format: OUTPUT_FORMAT_FULL,
         };
         let enc = serialize(&msg);
+        assert_eq!(&enc[enc.len() - 3..enc.len() - 1], &50u16.to_le_bytes());
         let dec: GetMwebUtxos = deserialize(&enc).unwrap();
         assert_eq!(dec, msg);
     }

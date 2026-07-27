@@ -253,6 +253,7 @@ fn assemble_body(
                     shared_secret: t,
                     spend_key: Some(spend),
                     block_height: None,
+                    is_pegin: pegin.is_some(),
                 });
             }
         }

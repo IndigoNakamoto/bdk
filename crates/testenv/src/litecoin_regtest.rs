@@ -475,6 +475,8 @@ pub struct LitecoinNodeEnv {
     pub cookie_file: PathBuf,
     pub rpc: RpcClient,
     pub rpc_url: String,
+    /// P2P listen port (`-port=`).
+    pub p2p_port: u16,
     litecoind: Child,
 }
 
@@ -486,14 +488,21 @@ impl LitecoinNodeEnv {
     }
 
     pub fn spawn(litecoind_exe: PathBuf) -> Result<Self> {
-        let (datadir, cookie_file, rpc, rpc_url, litecoind) = spawn_litecoind(litecoind_exe)?;
+        let (datadir, cookie_file, rpc, rpc_url, p2p_port, litecoind) =
+            spawn_litecoind(litecoind_exe)?;
         Ok(Self {
             datadir,
             cookie_file,
             rpc,
             rpc_url,
+            p2p_port,
             litecoind,
         })
+    }
+
+    /// `127.0.0.1:{p2p_port}` for [`bdk_mweb::lip0006_tcp::TcpMwebPeer`].
+    pub fn p2p_addr(&self) -> std::net::SocketAddr {
+        std::net::SocketAddr::from(([127, 0, 0, 1], self.p2p_port))
     }
 
     /// Mine to height 431, matching Core's `setup_mweb_chain` pre-activation tip.
@@ -580,7 +589,7 @@ pub struct LitecoinTestEnv {
 
 fn spawn_litecoind(
     litecoind_exe: PathBuf,
-) -> Result<(PathBuf, PathBuf, RpcClient, String, Child)> {
+) -> Result<(PathBuf, PathBuf, RpcClient, String, u16, Child)> {
     if !litecoind_exe.exists() {
         bail!("litecoind not found at {}", litecoind_exe.display());
     }
@@ -600,6 +609,8 @@ fn spawn_litecoind(
         .arg("-fallbackfee=0.0001")
         .arg("-acceptnonstdtxn=1")
         .arg("-mempoolreplacement=1")
+        // Match Core functional tests: allow MWEB light-client getdata without bans.
+        .arg("-whitelist=noban@127.0.0.1")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -631,7 +642,7 @@ fn spawn_litecoind(
         .context("litecoind RPC never became ready")?;
     rpc.create_wallet("bdk")?;
 
-    Ok((datadir, cookie, rpc, rpc_url, litecoind))
+    Ok((datadir, cookie, rpc, rpc_url, p2p_port, litecoind))
 }
 
 impl LitecoinTestEnv {
@@ -649,7 +660,8 @@ impl LitecoinTestEnv {
             bail!("electrs-ltc not found at {}", electrs_exe.display());
         }
 
-        let (datadir, cookie, rpc, rpc_url, mut litecoind) = spawn_litecoind(litecoind_exe)?;
+        let (datadir, cookie, rpc, rpc_url, _p2p_port, mut litecoind) =
+            spawn_litecoind(litecoind_exe)?;
         let electrum_port = free_port()?;
         let contents = fs::read_to_string(&cookie).context("read litecoind cookie")?;
         let (user, pass) = contents

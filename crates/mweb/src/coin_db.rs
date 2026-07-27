@@ -9,6 +9,9 @@ use alloc::vec::Vec;
 #[cfg(feature = "persist")]
 use crate::changeset::ChangeSet;
 
+/// Peg-in maturity in blocks (matches Litecoin Core / testenv).
+pub const MWEB_PEGIN_MATURITY: u32 = 6;
+
 /// Bucketed unspent MWEB balance at a chain tip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -53,6 +56,9 @@ pub struct MwebCoin {
     /// Inclusion height when known. `None` means unconfirmed / unknown.
     #[cfg_attr(feature = "serde", serde(default))]
     pub block_height: Option<u32>,
+    /// Whether this output was created by a peg-in kernel (needs [`MWEB_PEGIN_MATURITY`]).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub is_pegin: bool,
 }
 
 impl MwebCoin {
@@ -64,9 +70,33 @@ impl MwebCoin {
         }
     }
 
+    /// Whether the coin is confirmed and mature enough to spend at `tip_height`.
+    ///
+    /// Peg-ins require `tip + 1 - height >= maturity` (Core semantics). Non-pegins
+    /// only need a confirmation.
+    pub fn is_spendable(&self, tip_height: u32, maturity: u32) -> bool {
+        let Some(h) = self.block_height else {
+            return false;
+        };
+        if tip_height < h {
+            return false;
+        }
+        if self.is_pegin {
+            tip_height.saturating_add(1).saturating_sub(h) >= maturity
+        } else {
+            true
+        }
+    }
+
     /// Set inclusion height (builder-style).
     pub fn with_block_height(mut self, height: u32) -> Self {
         self.block_height = Some(height);
+        self
+    }
+
+    /// Mark as peg-in (builder-style).
+    pub fn with_pegin(mut self, is_pegin: bool) -> Self {
+        self.is_pegin = is_pegin;
         self
     }
 }
@@ -159,6 +189,39 @@ impl MwebCoinDatabase {
             .collect()
     }
 
+    /// Unspent coins that are confirmed and mature at `tip_height`.
+    pub fn unspent_spendable(&self, tip_height: u32, maturity: u32) -> Vec<MwebCoin> {
+        self.coins
+            .values()
+            .filter(|c| c.is_spendable(tip_height, maturity))
+            .cloned()
+            .collect()
+    }
+
+    /// Clear inclusion heights for coins at or above `height` (reorg disconnect).
+    ///
+    /// Does not delete coins; the next verified sync re-tags live UTXOs.
+    pub fn disconnect_from(&mut self, height: u32) {
+        for coin in self.coins.values_mut() {
+            if coin.block_height.is_some_and(|h| h >= height) {
+                coin.block_height = None;
+                #[cfg(feature = "persist")]
+                {
+                    self.staged.coins.insert(coin.output_id, coin.clone());
+                }
+            }
+        }
+        for coin in self.spent.values_mut() {
+            if coin.block_height.is_some_and(|h| h >= height) {
+                coin.block_height = None;
+                #[cfg(feature = "persist")]
+                {
+                    self.staged.spent.insert(coin.output_id, coin.clone());
+                }
+            }
+        }
+    }
+
     /// Set `block_height` on an unspent coin (stages when `persist` is enabled).
     pub fn set_block_height(&mut self, output_id: &[u8; 32], height: u32) -> bool {
         let Some(coin) = self.coins.get_mut(output_id) else {
@@ -222,5 +285,57 @@ impl MwebCoinDatabase {
     /// Take the staged changeset, leaving it empty.
     pub fn take_staged(&mut self) -> ChangeSet {
         core::mem::take(&mut self.staged)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn coin(id: u8, amount: u64, height: Option<u32>, is_pegin: bool) -> MwebCoin {
+        MwebCoin {
+            output_id: [id; 32],
+            commitment: [0; 33],
+            amount,
+            address_index: 0,
+            blind: [0; 32],
+            shared_secret: [0; 32],
+            spend_key: Some([1; 32]),
+            block_height: height,
+            is_pegin,
+        }
+    }
+
+    #[test]
+    fn immature_pegin_not_spendable_until_maturity() {
+        let mut db = MwebCoinDatabase::new();
+        db.insert(coin(1, 100, Some(10), true));
+        assert!(db.unspent_spendable(14, MWEB_PEGIN_MATURITY).is_empty()); // 14+1-10=5
+        assert_eq!(db.unspent_spendable(15, MWEB_PEGIN_MATURITY).len(), 1); // 15+1-10=6
+    }
+
+    #[test]
+    fn non_pegin_spendable_when_confirmed() {
+        let mut db = MwebCoinDatabase::new();
+        db.insert(coin(2, 50, Some(10), false));
+        assert_eq!(db.unspent_spendable(10, MWEB_PEGIN_MATURITY).len(), 1);
+    }
+
+    #[test]
+    fn disconnect_from_clears_heights() {
+        let mut db = MwebCoinDatabase::new();
+        db.insert(coin(1, 10, Some(5), false));
+        db.insert(coin(2, 20, Some(8), true));
+        db.insert(coin(3, 30, Some(12), false));
+        db.disconnect_from(8);
+        assert_eq!(db.get(&[1; 32]).unwrap().block_height, Some(5));
+        assert_eq!(db.get(&[2; 32]).unwrap().block_height, None);
+        assert_eq!(db.get(&[3; 32]).unwrap().block_height, None);
+        // Coins remain; re-tag restores spendability.
+        db.set_block_height(&[2; 32], 8);
+        assert_eq!(
+            db.unspent_spendable(20, MWEB_PEGIN_MATURITY).len(),
+            2 // coin1 + mature pegin coin2
+        );
     }
 }

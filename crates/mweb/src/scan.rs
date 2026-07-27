@@ -163,6 +163,7 @@ pub fn rewind_output(
         shared_secret: t,
         spend_key,
         block_height: None,
+        is_pegin: false,
     }))
 }
 
@@ -220,7 +221,19 @@ pub fn scan_mweb_tx_at(
     for input in &tx.body.inputs {
         let _ = db.mark_spent(&input.output_id);
     }
-    scan_outputs_at(keys, book, &tx.body.outputs, db, secp, block_height)
+    let is_pegin = tx.body.kernels.iter().any(|k| k.pegin.is_some());
+    let mut found = scan_outputs_at(keys, book, &tx.body.outputs, db, secp, block_height)?;
+    if is_pegin {
+        for coin in &mut found {
+            coin.is_pegin = true;
+            if let Some(stored) = db.get(&coin.output_id).cloned() {
+                let mut updated = stored;
+                updated.is_pegin = true;
+                db.insert(updated);
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// Scan the optional `mw_tx` on a Litecoin transaction.

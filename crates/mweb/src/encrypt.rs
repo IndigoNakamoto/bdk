@@ -120,6 +120,7 @@ mod tests {
                 shared_secret: [4; 32],
                 spend_key: Some([5; 32]),
                 block_height: Some(10),
+                is_pegin: false,
             },
         );
         let sealed = seal_changeset(&key, &cs).unwrap();

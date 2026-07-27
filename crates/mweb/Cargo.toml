@@ -49,7 +49,7 @@ encrypt = ["dep:chacha20poly1305", "std"]
 encrypt-changeset = ["encrypt", "persist", "dep:serde_json"]
 # SQLite-beside-wallet backend for ChangeSet.
 rusqlite = ["persist", "std", "dep:rusqlite"]
-# LIP-0006 codecs + sync helpers (trusted-peer MVP).
+# LIP-0006 codecs + verified sync helpers (HeaderAndPmmr / Trusted).
 lip0006 = ["std"]
 
 [[test]]
@@ -62,4 +62,8 @@ required-features = ["rusqlite"]
 
 [[test]]
 name = "lip0006_sync"
+required-features = ["lip0006", "zkp"]
+
+[[test]]
+name = "lip0006_p2p"
 required-features = ["lip0006", "zkp"]

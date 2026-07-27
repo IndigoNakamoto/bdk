@@ -125,18 +125,28 @@ cargo test --test mweb_pegin
 
 See [`MWEB_PEGIN.md`](MWEB_PEGIN.md) for the spike vectors and Core-finalize decision.
 
-### MWEB facade + parallel persist
+### MWEB facade + LIP-0006 tip seam
+
+```text
+Electrum/Esplora/RPC → Wallet::apply_update / apply_block
+  → tip = wallet.latest_checkpoint()
+  → (on shorter tip) MwebStore::disconnect_from(new_tip + 1)
+  → sync_mweb_at_tip(TcpMwebPeer | scripted, tip_hash, tip_height, HeaderAndPmmr)
+  → persist MwebStore
+```
 
 1. Author peg-in with `Wallet::prepare_mweb_pegin` (feature `mweb`), sign, `attach_mweb_tx`, broadcast
    **before** mining MWEB activation (mempool peg-in required on regtest).
-2. After maturity, sync transparent tip with `apply_block`, then
-   `scan_litecoin_tx_at(..., Some(tip_height))` into an [`MwebStore`] / `MwebCoinDatabase`.
-   Coins without `block_height` count as `mweb_untrusted_pending`; spend helpers use
-   **confirmed** coins by default.
-3. Persist beside the wallet: `MwebStore::persist_file_store` or `mweb-sqlite` /
-   `ChangeSet::persist_to_sqlite`. Encrypt at rest with `bdk_mweb::seal` /
-   `seal_changeset` (apps own the 32-byte key).
-4. Peg-out / send: `build_mweb_pegout` / `build_mweb_send`.
+2. Mine peg-in maturity (`MWEB_PEGIN_MATURITY` = 6), sync transparent tip with `apply_block`.
+3. Optional reorg: `MwebStore::disconnect_from(fork_height)`.
+4. Verified LIP sync: `TcpMwebPeer::connect(env.p2p_addr(), …)` +
+   `MwebStore::sync_at_tip(..., HeaderAndPmmr)` (or `bdk_mweb::lip0006::sync_mweb_at_tip`).
+5. Persist beside the wallet: `MwebStore::persist_file_store` / `mweb-sqlite`. Encrypt with
+   `bdk_mweb::seal` / `seal_changeset`.
+6. Peg-out / send from **spendable** coins (`unspent_spendable` / maturity gate):
+   `build_mweb_pegout` / `build_mweb_send` (`*_with(..., include_unconfirmed)` bypass).
+
+No separate Electrum+MWEB binary is required for regtest; the tip seam is identical.
 
 Example:
 
