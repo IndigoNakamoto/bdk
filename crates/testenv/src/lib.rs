@@ -21,4 +21,7 @@ pub use daemon::*;
 #[cfg(feature = "litecoin-daemon")]
 pub mod litecoin_regtest;
 #[cfg(feature = "litecoin-daemon")]
-pub use litecoin_regtest::{try_from_env, LitecoinTestEnv, RpcClient};
+pub use litecoin_regtest::{
+    try_from_env, try_node_from_env, LitecoinNodeEnv, LitecoinTestEnv, RpcClient,
+    FIRST_MWEB_HEIGHT, MWEB_PEGIN_MATURITY,
+};

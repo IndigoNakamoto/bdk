@@ -6,6 +6,7 @@ members = [
     "crates/file_store",
     "crates/electrum",
     "crates/esplora",
+    "crates/mweb",
     "crates/testenv",
     "examples/ltc-scan",
 ]

@@ -7,13 +7,16 @@ use std::str::FromStr;
 
 use bdk_chain::bitcoin::{
     address::NetworkUnchecked,
+    blockdata::script::witness_program::WitnessProgram,
+    blockdata::script::witness_version::WitnessVersion,
     consensus::{deserialize, serialize},
     constants::genesis_block,
     hex::{DisplayHex, FromHex},
     p2p::Magic,
-    Address, Network, Transaction, Txid,
+    Amount, Address, Network, OutPoint, ScriptBuf, Transaction, TxOut, Txid,
 };
-use bdk_chain::{ConfirmationBlockTime, Merge, TxGraph};
+use bdk_chain::spk_txout::SpkTxOutIndex;
+use bdk_chain::{is_mweb_bridge_output, ConfirmationBlockTime, Merge, TxGraph};
 
 /// A real mainnet HogEx transaction: the last transaction of block 3,149,263.
 ///
@@ -183,4 +186,72 @@ fn tx_graph_ingests_hogex_transaction() {
         0,
         "all outputs belong to the transaction itself",
     );
+}
+
+#[test]
+fn hogex_first_output_is_mweb_bridge_hogaddr() {
+    let raw = Vec::from_hex(HOGEX_TX_HEX).unwrap();
+    let tx: Transaction = deserialize(&raw).unwrap();
+    assert!(
+        is_mweb_bridge_output(&tx.output[0].script_pubkey),
+        "HogEx vout0 is the HogAddr (witness v8)"
+    );
+    assert!(!is_mweb_bridge_output(&tx.output[1].script_pubkey));
+    assert!(!is_mweb_bridge_output(&tx.output[2].script_pubkey));
+}
+
+/// Even if a wallet somehow watched a HogAddr / peg-in script, the indexer must refuse to treat it
+/// as a spendable UTXO. Peg-out p2wpkh outputs in the same HogEx must still index.
+#[test]
+fn spk_index_skips_bridge_outs_but_indexes_pegouts() {
+    let raw = Vec::from_hex(HOGEX_TX_HEX).unwrap();
+    let tx: Transaction = deserialize(&raw).unwrap();
+    let txid = tx.compute_txid();
+
+    let mut index = SpkTxOutIndex::<u32>::default();
+    assert!(index.insert_spk(0, tx.output[0].script_pubkey.clone()));
+    assert!(index.insert_spk(1, tx.output[1].script_pubkey.clone()));
+
+    let matched = index.scan(&tx);
+    assert!(
+        !matched.contains(&0),
+        "HogAddr must never be indexed even when watched"
+    );
+    assert!(
+        matched.contains(&1),
+        "transparent peg-out must still be indexed"
+    );
+    assert!(index.txout(OutPoint::new(txid, 0)).is_none());
+    assert!(index.txout(OutPoint::new(txid, 1)).is_some());
+    assert!(
+        index.is_relevant(&tx),
+        "peg-out match alone makes the HogEx relevant"
+    );
+}
+
+#[test]
+fn spk_index_skips_synthetic_v9_pegin() {
+    use bdk_chain::bitcoin::{absolute::LockTime, transaction::Version};
+
+    let prog = WitnessProgram::new(WitnessVersion::V9, &[0x42u8; 32]).unwrap();
+    let bridge = ScriptBuf::new_witness_program(&prog);
+    assert!(is_mweb_bridge_output(&bridge));
+
+    let mut index = SpkTxOutIndex::<u32>::default();
+    assert!(index.insert_spk(0, bridge.clone()));
+
+    let tx = Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            value: Amount::from_sat(50_000),
+            script_pubkey: bridge,
+        }],
+        is_hog_ex: false,
+        mw_tx: None,
+    };
+    let matched = index.scan(&tx);
+    assert!(matched.is_empty());
+    assert!(!index.is_relevant(&tx));
 }

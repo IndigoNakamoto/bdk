@@ -33,6 +33,8 @@ pub use bitcoin;
 /// This is the same crate as [`bitcoin`]: the dependency is aliased so that this fork tracks
 /// upstream BDK without touching its source.
 pub use bitcoin as litecoin;
+mod litecoin_scripts;
+pub use litecoin_scripts::{is_mweb_bridge_output, mweb_pegin_script_pubkey};
 mod balance;
 pub use balance::*;
 mod chain_data;

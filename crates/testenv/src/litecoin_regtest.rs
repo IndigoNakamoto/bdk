@@ -110,6 +110,50 @@ impl RpcClient {
         Ok(Address::from_str(s)?.require_network(Network::Regtest)?)
     }
 
+    /// `getnewaddress "" "mweb"` — stealth address for peg-in / MWEB receive.
+    pub fn get_new_mweb_address(&self) -> Result<Address> {
+        let v = self.call("getnewaddress", json!(["", "mweb"]))?;
+        let s = v
+            .as_str()
+            .ok_or_else(|| anyhow!("getnewaddress(mweb) returned non-string"))?;
+        Ok(Address::from_str(s)?.require_network(Network::Regtest)?)
+    }
+
+    /// Wallet `gettransaction` hex (works for wallet txs not yet in the txindex path).
+    pub fn get_wallet_transaction_hex(&self, txid: &Txid) -> Result<String> {
+        let v = self.call("gettransaction", json!([txid.to_string()]))?;
+        v["hex"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| anyhow!("gettransaction missing hex"))
+    }
+
+    pub fn get_balances_mine_trusted(&self) -> Result<Amount> {
+        let v = self.call("getbalances", json!([]))?;
+        let btc = v["mine"]["trusted"]
+            .as_f64()
+            .ok_or_else(|| anyhow!("getbalances.mine.trusted missing"))?;
+        Ok(Amount::from_btc(btc)?)
+    }
+
+    /// Amount received at an MWEB address (`listreceivedbyaddress`, minconf).
+    pub fn list_received_by_mweb_address(&self, address: &Address, minconf: u32) -> Result<Amount> {
+        let v = self.call(
+            "listreceivedbyaddress",
+            json!([minconf, false, true, address.to_string()]),
+        )?;
+        let arr = v
+            .as_array()
+            .ok_or_else(|| anyhow!("listreceivedbyaddress returned non-array"))?;
+        if arr.is_empty() {
+            return Ok(Amount::ZERO);
+        }
+        let btc = arr[0]["amount"]
+            .as_f64()
+            .ok_or_else(|| anyhow!("listreceivedbyaddress missing amount"))?;
+        Ok(Amount::from_btc(btc)?)
+    }
+
     pub fn generate_to_address(&self, n: u32, address: &Address) -> Result<Vec<BlockHash>> {
         let v = self.call("generatetoaddress", json!([n, address.to_string()]))?;
         let arr = v
@@ -334,6 +378,94 @@ fn electrum_call(electrum_host: &str, method: &str, params: Value) -> Result<Val
         .ok_or_else(|| anyhow!("electrum {method} missing result"))
 }
 
+/// Default regtest height of the first block that may contain MWEB (CSV / Core `FIRST_MWEB_HEIGHT`).
+pub const FIRST_MWEB_HEIGHT: u32 = 432;
+
+/// Peg-in maturity used by Litecoin Core before MWEB spends are considered safe.
+pub const MWEB_PEGIN_MATURITY: u32 = 6;
+
+/// Running `litecoind -regtest` only (no electrs). Enough for MWEB peg-in acceptance tests.
+pub struct LitecoinNodeEnv {
+    pub datadir: PathBuf,
+    pub rpc: RpcClient,
+    pub rpc_url: String,
+    litecoind: Child,
+}
+
+impl LitecoinNodeEnv {
+    pub fn from_env() -> Result<Self> {
+        let litecoind = std::env::var("LITECOIND_EXE")
+            .map_err(|_| anyhow!("LITECOIND_EXE is not set; skipping Litecoin node harness"))?;
+        Self::spawn(PathBuf::from(litecoind))
+    }
+
+    pub fn spawn(litecoind_exe: PathBuf) -> Result<Self> {
+        let (datadir, rpc, rpc_url, litecoind) = spawn_litecoind(litecoind_exe)?;
+        Ok(Self {
+            datadir,
+            rpc,
+            rpc_url,
+            litecoind,
+        })
+    }
+
+    /// Mine to height 431, matching Core's `setup_mweb_chain` pre-activation tip.
+    pub fn mine_to_pre_mweb(&self) -> Result<Address> {
+        let addr = self.rpc.get_new_address()?;
+        let height = self.rpc.get_block_count()?;
+        if height < FIRST_MWEB_HEIGHT - 1 {
+            self.rpc
+                .generate_to_address(FIRST_MWEB_HEIGHT - 1 - height, &addr)?;
+        }
+        Ok(addr)
+    }
+
+    /// Activate MWEB (mine through height 432) after a peg-in is in the mempool, or alone.
+    pub fn mine_mweb_activation(&self, mining_addr: &Address) -> Result<()> {
+        let height = self.rpc.get_block_count()?;
+        if height < FIRST_MWEB_HEIGHT {
+            self.rpc
+                .generate_to_address(FIRST_MWEB_HEIGHT - height, mining_addr)?;
+        }
+        Ok(())
+    }
+
+    /// Core-wallet finalize: `sendtoaddress` to an MWEB stealth address, return the full tx.
+    pub fn finalize_mweb_pegin(&self, mweb_address: &Address, amount: Amount) -> Result<Transaction> {
+        let txid = self.rpc.send_to_address(mweb_address, amount)?;
+        let hex = self.rpc.get_wallet_transaction_hex(&txid)?;
+        Ok(deserialize_hex(&hex)?)
+    }
+
+    pub fn mine_blocks(&self, n: u32, address: &Address) -> Result<Vec<BlockHash>> {
+        self.rpc.generate_to_address(n, address)
+    }
+}
+
+impl Drop for LitecoinNodeEnv {
+    fn drop(&mut self) {
+        let _ = self.litecoind.kill();
+        let _ = self.litecoind.wait();
+        let _ = fs::remove_dir_all(&self.datadir);
+    }
+}
+
+/// Return `Ok(None)` when `LITECOIND_EXE` is unset.
+pub fn try_node_from_env() -> Result<Option<LitecoinNodeEnv>> {
+    match LitecoinNodeEnv::from_env() {
+        Ok(env) => Ok(Some(env)),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("is not set") {
+                eprintln!("skip: {msg}");
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
 /// Running `litecoind -regtest` plus `electrs-ltc` pointed at it.
 pub struct LitecoinTestEnv {
     pub datadir: PathBuf,
@@ -343,6 +475,60 @@ pub struct LitecoinTestEnv {
     electrum_host: String,
     litecoind: Child,
     electrs: Child,
+}
+
+fn spawn_litecoind(litecoind_exe: PathBuf) -> Result<(PathBuf, RpcClient, String, Child)> {
+    if !litecoind_exe.exists() {
+        bail!("litecoind not found at {}", litecoind_exe.display());
+    }
+
+    let datadir = tempfile::tempdir()?.keep();
+    let rpc_port = free_port()?;
+    let p2p_port = free_port()?;
+    let cookie = datadir.join("regtest").join(".cookie");
+
+    let mut litecoind = Command::new(&litecoind_exe)
+        .arg("-regtest")
+        .arg(format!("-datadir={}", datadir.display()))
+        .arg(format!("-port={p2p_port}"))
+        .arg(format!("-rpcport={rpc_port}"))
+        .arg("-server=1")
+        .arg("-txindex=1")
+        .arg("-fallbackfee=0.0001")
+        .arg("-acceptnonstdtxn=1")
+        .arg("-mempoolreplacement=1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("failed to spawn litecoind")?;
+
+    let rpc_url = format!("http://127.0.0.1:{rpc_port}/");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let (user, pass) = loop {
+        if Instant::now() > deadline {
+            let _ = litecoind.kill();
+            bail!("timed out waiting for litecoind cookie");
+        }
+        if let Ok(contents) = fs::read_to_string(&cookie) {
+            if let Some((u, p)) = contents.split_once(':') {
+                break (u.to_string(), p.to_string());
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+
+    let rpc = RpcClient::new(&rpc_url, user, pass);
+    while Instant::now() < deadline {
+        if rpc.get_blockchain_info().is_ok() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    rpc.get_blockchain_info()
+        .context("litecoind RPC never became ready")?;
+    rpc.create_wallet("bdk")?;
+
+    Ok((datadir, rpc, rpc_url, litecoind))
 }
 
 impl LitecoinTestEnv {
@@ -356,61 +542,23 @@ impl LitecoinTestEnv {
     }
 
     pub fn spawn(litecoind_exe: PathBuf, electrs_exe: PathBuf) -> Result<Self> {
-        if !litecoind_exe.exists() {
-            bail!("litecoind not found at {}", litecoind_exe.display());
-        }
         if !electrs_exe.exists() {
             bail!("electrs-ltc not found at {}", electrs_exe.display());
         }
 
-        let datadir = tempfile::tempdir()?.keep();
-        let rpc_port = free_port()?;
-        let p2p_port = free_port()?;
+        let (datadir, rpc, rpc_url, mut litecoind) = spawn_litecoind(litecoind_exe)?;
         let electrum_port = free_port()?;
         let cookie = datadir.join("regtest").join(".cookie");
+        let contents = fs::read_to_string(&cookie).context("read litecoind cookie")?;
+        let (user, pass) = contents
+            .split_once(':')
+            .ok_or_else(|| anyhow!("malformed litecoind cookie"))?;
 
-        let mut litecoind = Command::new(&litecoind_exe)
-            .arg("-regtest")
-            .arg(format!("-datadir={}", datadir.display()))
-            .arg(format!("-port={p2p_port}"))
-            .arg(format!("-rpcport={rpc_port}"))
-            .arg("-server=1")
-            .arg("-txindex=1")
-            .arg("-fallbackfee=0.0001")
-            .arg("-acceptnonstdtxn=1")
-            // Litecoin Core 0.21 ships with mempool replacement off by default; BIP125 RBF
-            // (needed by relevant_conflicts) requires this switch.
-            .arg("-mempoolreplacement=1")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("failed to spawn litecoind")?;
-
-        let rpc_url = format!("http://127.0.0.1:{rpc_port}/");
-        let deadline = Instant::now() + Duration::from_secs(60);
-        let (user, pass) = loop {
-            if Instant::now() > deadline {
-                let _ = litecoind.kill();
-                bail!("timed out waiting for litecoind cookie");
-            }
-            if let Ok(contents) = fs::read_to_string(&cookie) {
-                if let Some((u, p)) = contents.split_once(':') {
-                    break (u.to_string(), p.to_string());
-                }
-            }
-            thread::sleep(Duration::from_millis(100));
-        };
-
-        let rpc = RpcClient::new(&rpc_url, user.clone(), pass.clone());
-        while Instant::now() < deadline {
-            if rpc.get_blockchain_info().is_ok() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-        rpc.get_blockchain_info()
-            .context("litecoind RPC never became ready")?;
-        rpc.create_wallet("bdk")?;
+        // RPC URL port is already bound; recover daemon RPC addr from rpc_url.
+        let rpc_addr = rpc_url
+            .trim_start_matches("http://")
+            .trim_end_matches('/')
+            .to_string();
 
         let electrs_db = datadir.join("electrs");
         fs::create_dir_all(&electrs_db)?;
@@ -422,7 +570,7 @@ impl LitecoinTestEnv {
             .arg("--db-dir")
             .arg(&electrs_db)
             .arg("--daemon-rpc-addr")
-            .arg(format!("127.0.0.1:{rpc_port}"))
+            .arg(&rpc_addr)
             .arg("--electrum-rpc-addr")
             .arg(format!("127.0.0.1:{electrum_port}"))
             .arg("--cookie")
@@ -437,6 +585,9 @@ impl LitecoinTestEnv {
         if let Err(e) = wait_for_tcp(&electrum_host, Duration::from_secs(60)) {
             let _ = electrs.kill();
             let _ = litecoind.kill();
+            let _ = electrs.wait();
+            let _ = litecoind.wait();
+            let _ = fs::remove_dir_all(&datadir);
             return Err(e.context(format!("electrs-ltc never opened {electrum_url}")));
         }
 
@@ -450,7 +601,6 @@ impl LitecoinTestEnv {
             electrs,
         };
 
-        // Wait until electrs tip matches the node (genesis).
         if let Err(e) = env.wait_until_electrum_sees_block(Duration::from_secs(60)) {
             drop(env);
             return Err(e);

@@ -91,6 +91,40 @@ HogEx ("Hogwarts Express") transaction that bridges value in and out of the exte
 serialized with segwit flag bit `0x08` set, which the upstream `bitcoin` decoder rejects outright.
 `crates/chain/tests/test_litecoin.rs` pins this down against a real mainnet transaction.
 
+### HogAddr vs peg-out (Phase 0)
+
+Do **not** skip every HogEx output. HogEx also carries **peg-out** transparent outputs (normal
+p2wpkh/p2tr) that are real spendable UTXOs. The indexer filters only MWEB **bridge** scripts:
+
+| Witness version | Role | Indexed as spendable? |
+| --- | --- | --- |
+| v8 | HogAddr (integration balance) | No |
+| v9 | Peg-in (`WITNESS_MWEB_PEGIN`) | No |
+| v0 / v1 / … | Peg-outs and ordinary payments | Yes, if watched |
+
+Helper: `bdk_chain::is_mweb_bridge_output`. See also [`docs/MWEB_PEGIN.md`](docs/MWEB_PEGIN.md).
+
+### Peg-in MVP (Phase 1)
+
+Pure BDK cannot author a peg-in from a stealth address alone: the v9 program is a **kernel id** and
+requires an `mw_tx` body (Bulletproofs / kernel signing). Decision: **finalize via litecoind/mwebd**.
+
+Wallet API (`bdk_wallet`): `TxBuilder::add_mweb_pegin` + `mweb_tx` + `finish_mweb_pegin`, then
+`attach_mweb_tx` after PSBT sign/extract (BIP174 rejects MWEB bodies). Empty stealth SPKs raise
+`CreateTxError::MwebPegInRequiresKernel`.
+
+### MWEB crypto foundation (Phase 2)
+
+Architecture ADR: [`docs/MWEB_ARCHITECTURE.md`](docs/MWEB_ARCHITECTURE.md).
+
+- New crate [`crates/mweb`](crates/mweb) (`bdk_mweb`): Core-compatible stealth keys
+  (`m/0'/100'/{0,1}'` + BLAKE3 `'A'` tweak), `Address::mweb` helpers, Elements `secp256k1-zkp`
+  FFI smoke tests.
+- **Not** embedding Nexus/`lndltc` (GPL) or gomobile-`mwebd`.
+
+**Deferred (Phase 3+):** `MwebCoinDatabase`, LIP-0006 scan, MWEB spend, peg-in/out without Core
+custody, unified balance API.
+
 ## Regtest harness (`litecoind` + `electrs-ltc`)
 
 Feature `bdk_testenv/litecoin-daemon` spawns binaries from `LITECOIND_EXE` and `ELECTRS_LTC_EXE`.
@@ -101,6 +135,13 @@ without local daemons. To run the migrated daemon tests:
 export LITECOIND_EXE=/path/to/litecoind
 export ELECTRS_LTC_EXE=/path/to/electrs   # build from rust-litecoin/electrs-ltc
 just test-regtest
+```
+
+Node-only (MWEB peg-in acceptance, no electrs):
+
+```bash
+export LITECOIND_EXE=/path/to/litecoind
+cargo test -p bdk_testenv --features litecoin-daemon --test mweb_pegin
 ```
 
 The upstream Bitcoin `TestEnv` (`electrsd`) remains behind `daemon` + `RUSTFLAGS='--cfg

@@ -113,10 +113,24 @@ just test-regtest
 
 There is no regtest Esplora for Litecoin; Esplora stays on live testnet via `just test-live`.
 
+MWEB peg-in acceptance (node-only, needs `LITECOIND_EXE`):
+
+```bash
+cargo test -p bdk_testenv --features litecoin-daemon --test mweb_pegin
+# and from bdk_wallet:
+cargo test --test mweb_pegin
+```
+
+See [`MWEB_PEGIN.md`](MWEB_PEGIN.md) for the spike vectors and Core-finalize decision.
+
 ## Notes
 
 - Litecoin testnet here is Litecoin Core's testnet4 directory layout, unrelated to Bitcoin BIP-94.
 - In the aliased API, `Network::Bitcoin` means Litecoin mainnet; `Network::Testnet4` means Litecoin testnet.
-- MWEB stealth addresses (`ltcmweb1…`) are rejected by `TxBuilder` (`CreateTxError::EmptyScriptPubkey`).
-- HogEx transactions decode and can be ingested; they do not inflate a transparent wallet's balance
-  unless they pay a watched script pubkey.
+- **HogAddr (v8) / peg-in (v9)** bridge outs are never indexed as spendable UTXOs; **peg-out**
+  p2wpkh/p2tr outs in the same HogEx still credit the wallet when watched.
+- MWEB stealth destinations (`ltcmweb1…` / `tmweb1…`) raise `CreateTxError::MwebPegInRequiresKernel`.
+  Peg-in MVP: `add_mweb_pegin` + finalizer `mw_tx` via litecoind/mwebd (not pure BDK).
+- Phase 2 (`bdk_mweb`) can **derive** Core-compatible MWEB addresses; **scan/receive/spend** inside
+  MWEB is not available yet (see [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md)).
+- HogEx transactions decode and can be ingested; bridge outputs never inflate transparent balance.

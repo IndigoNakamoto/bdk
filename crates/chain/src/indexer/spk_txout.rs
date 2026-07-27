@@ -5,7 +5,7 @@ use core::ops::RangeBounds;
 
 use crate::{
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap},
-    Indexer,
+    is_mweb_bridge_output, Indexer,
 };
 use bitcoin::{Amount, OutPoint, Script, ScriptBuf, SignedAmount, Transaction, TxIn, TxOut, Txid};
 
@@ -109,7 +109,13 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
 
     /// Scan a single `TxOut` for a matching script pubkey and returns the index that matches the
     /// script pubkey (if any).
+    ///
+    /// Litecoin MWEB bridge outputs (witness v8 HogAddr / v9 peg-in) are never indexed, even if
+    /// their script bytes were inserted into the watch list.
     pub fn scan_txout(&mut self, op: OutPoint, txout: &TxOut) -> Option<&I> {
+        if is_mweb_bridge_output(&txout.script_pubkey) {
+            return None;
+        }
         let spk_i = self.spk_indices.get(&txout.script_pubkey);
         if let Some(spk_i) = spk_i {
             self.txouts.insert(op, (spk_i.clone(), txout.clone()));
@@ -442,10 +448,10 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
             .input
             .iter()
             .any(|input| self.txouts.contains_key(&input.previous_output));
-        let output_matches = tx
-            .output
-            .iter()
-            .any(|output| self.spk_indices.contains_key(&output.script_pubkey));
+        let output_matches = tx.output.iter().any(|output| {
+            !is_mweb_bridge_output(&output.script_pubkey)
+                && self.spk_indices.contains_key(&output.script_pubkey)
+        });
         input_matches || output_matches
     }
 
@@ -464,6 +470,7 @@ impl<I: Clone + Ord + core::fmt::Debug> SpkTxOutIndex<I> {
         let spks_from_outputs = tx
             .output
             .iter()
+            .filter(|txout| !is_mweb_bridge_output(&txout.script_pubkey))
             .filter_map(|txout| self.spk_indices.get_key_value(&txout.script_pubkey))
             .map(|(spk, i)| (i.clone(), spk.clone()));
         spks_from_inputs.chain(spks_from_outputs).collect()
