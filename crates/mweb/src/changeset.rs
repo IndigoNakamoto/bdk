@@ -58,6 +58,7 @@ mod tests {
             blind: [2; 32],
             shared_secret: [3; 32],
             spend_key: Some([4; 32]),
+            block_height: None,
         }
     }
 

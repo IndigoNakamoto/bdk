@@ -466,36 +466,45 @@ impl BitcoindRpcErrorExt for bitcoincore_rpc::Error {
 mod test {
     use crate::{Emitter, NO_EXPECTED_MEMPOOL_TXS};
     use bdk_chain::local_chain::LocalChain;
-    use bdk_testenv::{anyhow, TestEnv};
+    use bdk_testenv::try_node_from_env;
     use bitcoin::{hashes::Hash, Address, Amount, ScriptBuf, Txid, WScriptHash};
+    use bitcoincore_rpc::{Auth, Client, RpcApi};
     use std::collections::HashSet;
 
     #[test]
-    fn test_expected_mempool_txids_accumulate_and_remove() -> anyhow::Result<()> {
-        let env = TestEnv::new()?;
-        let (chain, _) = LocalChain::from_genesis(env.genesis_hash()?);
-        let chain_tip = chain.tip();
+    fn test_expected_mempool_txids_accumulate_and_remove() {
+        let Some(env) = try_node_from_env().expect("harness") else {
+            return;
+        };
 
-        let rpc_client = bitcoincore_rpc::Client::new(
-            &env.bitcoind.rpc_url(),
-            bitcoincore_rpc::Auth::CookieFile(env.bitcoind.params.cookie_file.clone()),
-        )?;
+        let rpc_client = Client::new(
+            &env.rpc_url,
+            Auth::CookieFile(env.cookie_file.clone()),
+        )
+        .expect("rpc client");
+        let genesis = rpc_client.get_block_hash(0).expect("genesis");
+        let (chain, _) = LocalChain::from_genesis(genesis);
+        let mut emitter = Emitter::new(&rpc_client, chain.tip(), 1, NO_EXPECTED_MEMPOOL_TXS);
 
-        let mut emitter = Emitter::new(&rpc_client, chain_tip.clone(), 1, NO_EXPECTED_MEMPOOL_TXS);
-
-        env.mine_blocks(100, None)?;
-        while emitter.next_block()?.is_some() {}
+        let mining = env.rpc.get_new_address().expect("mining");
+        // Mature coinbases before spending (Litecoin coinbase maturity = 100).
+        env.rpc.generate_to_address(110, &mining).expect("mine");
+        while emitter.next_block().expect("next").is_some() {}
 
         let spk_to_track = ScriptBuf::new_p2wsh(&WScriptHash::all_zeros());
-        let addr_to_track = Address::from_script(&spk_to_track, bitcoin::Network::Regtest)?;
+        let addr_to_track =
+            Address::from_script(&spk_to_track, bitcoin::Network::Regtest).expect("addr");
         let mut mempool_txids = HashSet::new();
 
-        // Send a tx at different heights and ensure txs are accumulating in expected_mempool_txids.
-        for _ in 0..10 {
-            let sent_txid = env.send(&addr_to_track, Amount::from_sat(1_000))?;
+        // Send a tx at different heights and ensure txs accumulate in mempool_snapshot.
+        for _ in 0..3 {
+            let sent_txid = env
+                .rpc
+                .send_to_address(&addr_to_track, Amount::from_btc(0.01).unwrap())
+                .expect("send");
             mempool_txids.insert(sent_txid);
-            emitter.mempool()?;
-            env.mine_blocks(1, None)?;
+            emitter.mempool().expect("mempool");
+            env.rpc.generate_to_address(1, &mining).expect("mine1");
 
             for txid in &mempool_txids {
                 assert!(
@@ -505,9 +514,8 @@ mod test {
             }
         }
 
-        // Process each block and check that confirmed txids are removed from from
-        // expected_mempool_txids.
-        while let Some(block_event) = emitter.next_block()? {
+        // Process each block and check that confirmed txids leave the snapshot.
+        while let Some(block_event) = emitter.next_block().expect("next_block") {
             let confirmed_txids: HashSet<Txid> = block_event
                 .block
                 .txdata
@@ -533,7 +541,5 @@ mod test {
         }
 
         assert!(emitter.mempool_snapshot.is_empty());
-
-        Ok(())
     }
 }

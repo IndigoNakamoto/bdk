@@ -111,7 +111,9 @@ export ELECTRS_LTC_EXE=/path/to/electrs
 just test-regtest
 ```
 
-There is no regtest Esplora for Litecoin; Esplora stays on live testnet via `just test-live`.
+**Electrum-first regtest:** chain/daemon coverage uses `litecoind` + `electrs-ltc` via
+`just test-regtest`. There is no packaged Litecoin regtest Esplora; Esplora stays on live
+testnet via `just test-live`.
 
 MWEB peg-in acceptance (node-only, needs `LITECOIND_EXE`):
 
@@ -123,6 +125,25 @@ cargo test --test mweb_pegin
 
 See [`MWEB_PEGIN.md`](MWEB_PEGIN.md) for the spike vectors and Core-finalize decision.
 
+### MWEB facade + parallel persist
+
+1. Author peg-in with `Wallet::prepare_mweb_pegin` (feature `mweb`), sign, `attach_mweb_tx`, broadcast
+   **before** mining MWEB activation (mempool peg-in required on regtest).
+2. After maturity, sync transparent tip with `apply_block`, then
+   `scan_litecoin_tx_at(..., Some(tip_height))` into an [`MwebStore`] / `MwebCoinDatabase`.
+   Coins without `block_height` count as `mweb_untrusted_pending`; spend helpers use
+   **confirmed** coins by default.
+3. Persist beside the wallet: `MwebStore::persist_file_store` or `mweb-sqlite` /
+   `ChangeSet::persist_to_sqlite`. Encrypt at rest with `bdk_mweb::seal` /
+   `seal_changeset` (apps own the 32-byte key).
+4. Peg-out / send: `build_mweb_pegout` / `build_mweb_send`.
+
+Example:
+
+```bash
+cargo run -p bdk_wallet --example mweb_regtest --features "mweb,file_store,test-utils"
+```
+
 ## Notes
 
 - Litecoin testnet here is Litecoin Core's testnet4 directory layout, unrelated to Bitcoin BIP-94.
@@ -131,9 +152,8 @@ See [`MWEB_PEGIN.md`](MWEB_PEGIN.md) for the spike vectors and Core-finalize dec
   p2wpkh/p2tr outs in the same HogEx still credit the wallet when watched.
 - MWEB stealth destinations (`ltcmweb1…` / `tmweb1…`) raise `CreateTxError::MwebPegInRequiresKernel`.
   Peg-in: `Wallet::prepare_mweb_pegin` or `build_pegin` + `attach_mweb_tx` (Core finalize still OK).
-- Phase 6: minimal facade — `balance_combined(&MwebCoinDatabase)`, `prepare_mweb_pegin`,
-  `build_mweb_send`, `build_mweb_pegout` (feature `mweb`). Caller owns the MWEB DB. LIP-0006 P2P
-  sync remains deferred (see [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md)).
+- Facade: `balance_combined` (confirmation buckets), `MwebStore`, `prepare_mweb_pegin`,
+  `build_mweb_send`, `build_mweb_pegout` (feature `mweb`). See [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md).
 
 MWEB spend / peg / facade acceptance (needs `LITECOIND_EXE`):
 

@@ -471,6 +471,8 @@ pub const MWEB_PEGIN_MATURITY: u32 = 6;
 /// Running `litecoind -regtest` only (no electrs). Enough for MWEB peg-in acceptance tests.
 pub struct LitecoinNodeEnv {
     pub datadir: PathBuf,
+    /// Path to litecoind cookie auth file (`regtest/.cookie`).
+    pub cookie_file: PathBuf,
     pub rpc: RpcClient,
     pub rpc_url: String,
     litecoind: Child,
@@ -484,9 +486,10 @@ impl LitecoinNodeEnv {
     }
 
     pub fn spawn(litecoind_exe: PathBuf) -> Result<Self> {
-        let (datadir, rpc, rpc_url, litecoind) = spawn_litecoind(litecoind_exe)?;
+        let (datadir, cookie_file, rpc, rpc_url, litecoind) = spawn_litecoind(litecoind_exe)?;
         Ok(Self {
             datadir,
+            cookie_file,
             rpc,
             rpc_url,
             litecoind,
@@ -575,7 +578,9 @@ pub struct LitecoinTestEnv {
     electrs: Child,
 }
 
-fn spawn_litecoind(litecoind_exe: PathBuf) -> Result<(PathBuf, RpcClient, String, Child)> {
+fn spawn_litecoind(
+    litecoind_exe: PathBuf,
+) -> Result<(PathBuf, PathBuf, RpcClient, String, Child)> {
     if !litecoind_exe.exists() {
         bail!("litecoind not found at {}", litecoind_exe.display());
     }
@@ -626,7 +631,7 @@ fn spawn_litecoind(litecoind_exe: PathBuf) -> Result<(PathBuf, RpcClient, String
         .context("litecoind RPC never became ready")?;
     rpc.create_wallet("bdk")?;
 
-    Ok((datadir, rpc, rpc_url, litecoind))
+    Ok((datadir, cookie, rpc, rpc_url, litecoind))
 }
 
 impl LitecoinTestEnv {
@@ -644,9 +649,8 @@ impl LitecoinTestEnv {
             bail!("electrs-ltc not found at {}", electrs_exe.display());
         }
 
-        let (datadir, rpc, rpc_url, mut litecoind) = spawn_litecoind(litecoind_exe)?;
+        let (datadir, cookie, rpc, rpc_url, mut litecoind) = spawn_litecoind(litecoind_exe)?;
         let electrum_port = free_port()?;
-        let cookie = datadir.join("regtest").join(".cookie");
         let contents = fs::read_to_string(&cookie).context("read litecoind cookie")?;
         let (user, pass) = contents
             .split_once(':')

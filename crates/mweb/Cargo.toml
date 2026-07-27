@@ -18,9 +18,12 @@ bitcoin = { package = "litecoin", version = "0.32.8-rc.1", default-features = fa
 blake3 = { version = "1.5", default-features = false }
 # MW-compatible secp256k1-zkp (bulletproof 675 + schnorrsig/aggsig). Not Elements CT rangeproofs.
 grin_secp256k1zkp = { version = "0.7.15", optional = true, default-features = false, features = ["bullet-proof-sizing"] }
-rand = { version = "0.8", default-features = false, features = ["std"] }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
 bdk_core = { path = "../core", version = "0.6.2", optional = true, default-features = false }
+chacha20poly1305 = { version = "0.10", optional = true, default-features = false, features = ["alloc", "rand_core"] }
+rusqlite = { version = "0.31.0", features = ["bundled"], optional = true }
+serde_json = { version = "1", optional = true, default-features = false, features = ["std"] }
 
 [dev-dependencies]
 bitcoin = { package = "litecoin", version = "0.32.8-rc.1", default-features = false, features = ["std", "rand-std"] }
@@ -29,17 +32,34 @@ serde_json = "1"
 bdk_testenv = { path = "../testenv", features = ["litecoin-daemon"] }
 bdk_file_store = { path = "../file_store", version = "0.22.0" }
 tempfile = "3"
+rusqlite = { version = "0.31.0", features = ["bundled"] }
 
 [features]
 default = ["std", "zkp"]
-std = ["bitcoin/std", "blake3/std", "bdk_core?/std"]
+std = ["bitcoin/std", "bitcoin/rand-std", "blake3/std", "bdk_core?/std"]
 # Grin/Litecoin MW secp256k1-zkp (bulletproofs + schnorr). Required for spend authoring.
 zkp = ["dep:grin_secp256k1zkp"]
 # Serde for MwebCoin (and ChangeSet when combined with `persist`).
 serde = ["dep:serde", "bitcoin/serde"]
 # Parallel persistence: serde + bdk_core::Merge ChangeSet for file_store / SQLite-beside-wallet.
 persist = ["serde", "dep:bdk_core"]
+# ChaCha20-Poly1305 seal/open helpers for coin secrets / changesets.
+encrypt = ["dep:chacha20poly1305", "std"]
+# JSON encode for sealed changesets (pulls serde_json).
+encrypt-changeset = ["encrypt", "persist", "dep:serde_json"]
+# SQLite-beside-wallet backend for ChangeSet.
+rusqlite = ["persist", "std", "dep:rusqlite"]
+# LIP-0006 codecs + sync helpers (trusted-peer MVP).
+lip0006 = ["std"]
 
 [[test]]
 name = "persist_filestore"
 required-features = ["persist"]
+
+[[test]]
+name = "persist_sqlite"
+required-features = ["rusqlite"]
+
+[[test]]
+name = "lip0006_sync"
+required-features = ["lip0006", "zkp"]

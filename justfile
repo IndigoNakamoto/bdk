@@ -25,15 +25,16 @@ check:
 fmt:
    cargo +nightly fmt
 
-# Run all tests for all crates with all features enabled
-# bdk_bitcoind_rpc is absent: it is excluded from the workspace until a Litecoin build of
-# bitcoincore-rpc exists. See PORTING.md.
+# Run all tests for all crates with all features enabled.
+# Daemon tests (MWEB / bitcoind_rpc emitter) skip without LITECOIND_EXE.
 test:
    @just _test-chain
    @just _test-core
    @just _test-electrum
    @just _test-esplora
    @just _test-file_store
+   @just _test-mweb
+   @just _test-bitcoind_rpc
    @just _test-testenv
 
 _test-chain:
@@ -50,6 +51,12 @@ _test-esplora:
 
 _test-file_store:
     cargo test -p bdk_file_store --all-features
+
+_test-mweb:
+    cargo test -p bdk_mweb --all-features
+
+_test-bitcoind_rpc:
+    cargo test -p bdk_bitcoind_rpc --all-features
 
 _test-testenv:
     cargo test -p bdk_testenv --all-features

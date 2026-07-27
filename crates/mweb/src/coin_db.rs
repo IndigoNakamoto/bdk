@@ -9,6 +9,23 @@ use alloc::vec::Vec;
 #[cfg(feature = "persist")]
 use crate::changeset::ChangeSet;
 
+/// Bucketed unspent MWEB balance at a chain tip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MwebBalance {
+    /// Coins with a known `block_height` and at least one confirmation at the tip.
+    pub confirmed: u64,
+    /// Coins with unknown height, or not yet confirmed at the tip.
+    pub untrusted_pending: u64,
+}
+
+impl MwebBalance {
+    /// Confirmed + untrusted pending.
+    pub fn total(&self) -> u64 {
+        self.confirmed.saturating_add(self.untrusted_pending)
+    }
+}
+
 /// A rewound MWEB output owned by the wallet.
 ///
 /// # Security
@@ -33,6 +50,25 @@ pub struct MwebCoin {
     pub shared_secret: [u8; 32],
     /// One-time output spend key `k_o` when the spend secret is available.
     pub spend_key: Option<[u8; 32]>,
+    /// Inclusion height when known. `None` means unconfirmed / unknown.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub block_height: Option<u32>,
+}
+
+impl MwebCoin {
+    /// Whether this coin has at least one confirmation at `tip_height`.
+    pub fn is_confirmed(&self, tip_height: u32) -> bool {
+        match self.block_height {
+            Some(h) => tip_height >= h,
+            None => false,
+        }
+    }
+
+    /// Set inclusion height (builder-style).
+    pub fn with_block_height(mut self, height: u32) -> Self {
+        self.block_height = Some(height);
+        self
+    }
 }
 
 /// Unspent MWEB coins keyed by output id.
@@ -81,9 +117,22 @@ impl MwebCoinDatabase {
         }
     }
 
-    /// Sum of unspent amounts.
+    /// Sum of all unspent amounts (confirmed and pending).
     pub fn balance(&self) -> u64 {
         self.coins.values().map(|c| c.amount).sum()
+    }
+
+    /// Bucketed unspent balance at `tip_height` (1+ confirmation ⇒ confirmed).
+    pub fn balance_at(&self, tip_height: u32) -> MwebBalance {
+        let mut bal = MwebBalance::default();
+        for coin in self.coins.values() {
+            if coin.is_confirmed(tip_height) {
+                bal.confirmed = bal.confirmed.saturating_add(coin.amount);
+            } else {
+                bal.untrusted_pending = bal.untrusted_pending.saturating_add(coin.amount);
+            }
+        }
+        bal
     }
 
     /// Iterator over unspent coins.
@@ -99,6 +148,30 @@ impl MwebCoinDatabase {
     /// Snapshot of unspent coins.
     pub fn unspent_vec(&self) -> Vec<MwebCoin> {
         self.coins.values().cloned().collect()
+    }
+
+    /// Unspent coins with at least one confirmation at `tip_height`.
+    pub fn unspent_confirmed(&self, tip_height: u32) -> Vec<MwebCoin> {
+        self.coins
+            .values()
+            .filter(|c| c.is_confirmed(tip_height))
+            .cloned()
+            .collect()
+    }
+
+    /// Set `block_height` on an unspent coin (stages when `persist` is enabled).
+    pub fn set_block_height(&mut self, output_id: &[u8; 32], height: u32) -> bool {
+        let Some(coin) = self.coins.get_mut(output_id) else {
+            return false;
+        };
+        coin.block_height = Some(height);
+        #[cfg(feature = "persist")]
+        {
+            self.staged
+                .coins
+                .insert(*output_id, coin.clone());
+        }
+        true
     }
 
     /// Whether `output_id` is in the spent set.

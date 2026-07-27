@@ -1,6 +1,7 @@
 //! Core `Keychain::RewindOutput` receive scan (LIP-0004 §7 as shipped).
 //!
-//! Feeds decoded `mw_tx` outputs (e.g. from Core RPC). Full LIP-0006 P2P sync is deferred.
+//! Wire input may be decoded `mw_tx` bodies (Core RPC) or FULL_UTXO batches from
+//! [`crate::lip0006`] (feature `lip0006`).
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -161,10 +162,11 @@ pub fn rewind_output(
         blind: pre_blind,
         shared_secret: t,
         spend_key,
+        block_height: None,
     }))
 }
 
-/// Scan MWEB outputs and insert matches into `db`.
+/// Scan MWEB outputs and insert matches into `db` (unknown inclusion height).
 pub fn scan_outputs(
     keys: &MasterKeys,
     book: &AddressBook,
@@ -172,9 +174,22 @@ pub fn scan_outputs(
     db: &mut MwebCoinDatabase,
     secp: &Secp256k1<All>,
 ) -> Result<Vec<MwebCoin>, Error> {
+    scan_outputs_at(keys, book, outputs, db, secp, None)
+}
+
+/// Scan MWEB outputs, tagging matches with `block_height` when known.
+pub fn scan_outputs_at(
+    keys: &MasterKeys,
+    book: &AddressBook,
+    outputs: &[mweb::Output],
+    db: &mut MwebCoinDatabase,
+    secp: &Secp256k1<All>,
+    block_height: Option<u32>,
+) -> Result<Vec<MwebCoin>, Error> {
     let mut found = Vec::new();
     for output in outputs {
-        if let Some(coin) = rewind_output(keys, book, output, secp)? {
+        if let Some(mut coin) = rewind_output(keys, book, output, secp)? {
+            coin.block_height = block_height;
             db.insert(coin.clone());
             found.push(coin);
         }
@@ -190,10 +205,22 @@ pub fn scan_mweb_tx(
     db: &mut MwebCoinDatabase,
     secp: &Secp256k1<All>,
 ) -> Result<Vec<MwebCoin>, Error> {
+    scan_mweb_tx_at(keys, book, tx, db, secp, None)
+}
+
+/// [`scan_mweb_tx`] with an optional inclusion height for new coins.
+pub fn scan_mweb_tx_at(
+    keys: &MasterKeys,
+    book: &AddressBook,
+    tx: &mweb::Transaction,
+    db: &mut MwebCoinDatabase,
+    secp: &Secp256k1<All>,
+    block_height: Option<u32>,
+) -> Result<Vec<MwebCoin>, Error> {
     for input in &tx.body.inputs {
         let _ = db.mark_spent(&input.output_id);
     }
-    scan_outputs(keys, book, &tx.body.outputs, db, secp)
+    scan_outputs_at(keys, book, &tx.body.outputs, db, secp, block_height)
 }
 
 /// Scan the optional `mw_tx` on a Litecoin transaction.
@@ -204,8 +231,20 @@ pub fn scan_litecoin_tx(
     db: &mut MwebCoinDatabase,
     secp: &Secp256k1<All>,
 ) -> Result<Vec<MwebCoin>, Error> {
+    scan_litecoin_tx_at(keys, book, tx, db, secp, None)
+}
+
+/// [`scan_litecoin_tx`] with an optional inclusion height for new coins.
+pub fn scan_litecoin_tx_at(
+    keys: &MasterKeys,
+    book: &AddressBook,
+    tx: &bitcoin::Transaction,
+    db: &mut MwebCoinDatabase,
+    secp: &Secp256k1<All>,
+    block_height: Option<u32>,
+) -> Result<Vec<MwebCoin>, Error> {
     let Some(mw) = tx.mw_tx.as_ref() else {
         return Ok(Vec::new());
     };
-    scan_mweb_tx(keys, book, mw, db, secp)
+    scan_mweb_tx_at(keys, book, mw, db, secp, block_height)
 }

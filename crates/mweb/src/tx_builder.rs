@@ -252,6 +252,7 @@ fn assemble_body(
                     blind: raw_blind,
                     shared_secret: t,
                     spend_key: Some(spend),
+                    block_height: None,
                 });
             }
         }

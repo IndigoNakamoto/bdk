@@ -19,6 +19,7 @@ fn sample_coin(id: u8, amount: u64) -> MwebCoin {
         blind: [0x0b; 32],
         shared_secret: [0x0c; 32],
         spend_key: Some([0x0d; 32]),
+        block_height: Some(100),
     }
 }
 

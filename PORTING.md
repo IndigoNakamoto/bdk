@@ -61,11 +61,17 @@ Ported: `bdk_core`, `bdk_chain`, `bdk_file_store`, `bdk_electrum`, `bdk_esplora`
 
 Deferred:
 
-- **`bdk_bitcoind_rpc`** — needs a `bitcoincore-rpc` 0.19 fork. The only Litecoin-aware fork
-  (`ynohtna92/rust-bitcoincore-rpc`) is 0.17, unpublished, and last touched in February 2024.
 - **Regtest Esplora** — there is no packaged Litecoin regtest Esplora server, so Esplora coverage
   stays on live testnet (`just test-live`). Chain/Electrum daemon tests use `litecoind` +
-  `electrs-ltc` via `just test-regtest`.
+  `electrs-ltc` via `just test-regtest` (**Electrum-first**).
+- **miniscript 13** — parked until upstream `bdk_wallet` moves off 12.x.
+
+Ported extras:
+
+- **`bdk_bitcoind_rpc`** — uses a vendored `bitcoincore-rpc` 0.19 with `bitcoin → litecoin`
+  alias ([`vendor/bitcoincore-rpc`](./vendor/bitcoincore-rpc)). Litecoin emitter smoke test:
+  `cargo test -p bdk_bitcoind_rpc --test test_emitter_litecoin` (needs `LITECOIND_EXE`).
+  Upstream Bitcoin `TestEnv` tests are parked as `*.upstream`.
 
 ## Merging upstream
 
@@ -126,16 +132,21 @@ Architecture ADR: [`docs/MWEB_ARCHITECTURE.md`](docs/MWEB_ARCHITECTURE.md).
   `MwebCoinDatabase`, `MwebTxBuilder` (MWEB→MWEB + peg-out), and `build_pegin`.
 - Wallet feature `mweb`: `balance_combined`, `prepare_mweb_pegin`, `build_mweb_send`,
   `build_mweb_pegout` — caller still owns `MwebCoinDatabase`.
-- Feature `persist` on `bdk_mweb`: parallel `ChangeSet` (`take_staged` / `apply_changeset`) for
-  `bdk_file_store::Store` beside the wallet. **Not** part of `Wallet::ChangeSet`. Coin secrets
-  are spend-equivalent — encrypt at rest in apps.
+- Feature `persist` on `bdk_mweb`: parallel `ChangeSet` for `bdk_file_store` and SQLite
+  (`rusqlite` feature). Wallet `MwebStore` (feature `mweb` / `mweb-sqlite`) loads beside the
+  wallet. **Not** part of `Wallet::ChangeSet`. Encrypt at rest with `encrypt` /
+  `seal_changeset` (apps own the key).
 - Crypto: Grin/MW `grin_secp256k1zkp` FFI for **675-byte bulletproofs** + schnorr (Elements CT
   rangeproofs rejected). Switch commitments keep Core’s H prefix `0x0b`.
 - Regtest: `cargo test -p bdk_mweb` and `cargo test -p bdk_wallet --test mweb_facade`;
-  needs `LITECOIND_EXE`. Persist tests: `cargo test -p bdk_mweb --features persist --test persist_filestore`.
-- **Not** embedding Nexus/`lndltc` (GPL) or gomobile-`mwebd`. LIP-0006 P2P UTXO sync still deferred.
+  needs `LITECOIND_EXE`. Persist: `persist_filestore` / `persist_sqlite`. Example:
+  `cargo run -p bdk_wallet --example mweb_regtest --features "mweb,file_store,test-utils"`.
+- **Electrum-first** regtest chain source (`litecoind` + `electrs-ltc`). No regtest Esplora.
+- **Not** embedding Nexus/`lndltc` (GPL) or gomobile-`mwebd`.
 
-**Deferred:** Wallet-owned `MwebCoinDatabase` / SQLite-beside-wallet backend; LIP-0006 P2P sync.
+**Also landed:** LIP-0006 codecs + `sync_mweb_utxos` / `TcpMwebPeer` (feature `lip0006`,
+trusted-peer MVP + parent_hashes presence check); `bdk_bitcoind_rpc` via vendored
+`bitcoincore-rpc` Litecoin alias.
 
 ## Regtest harness (`litecoind` + `electrs-ltc`)
 

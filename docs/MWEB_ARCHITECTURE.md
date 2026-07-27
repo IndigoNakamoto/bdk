@@ -105,22 +105,24 @@ A_i = a·B_i
 
 ### Phase 3–6 notes
 
-- Receive scan implements Litecoin Core `Keychain::RewindOutput` (LIP-0004 §7 as shipped), not a
-  full LIP-0006 P2P client. Wire input today is decoded `mw_tx` bodies. LIP-0006 `getmwebutxos` /
-  leafset sync remains the future light-client transport.
+- Receive scan implements Litecoin Core `Keychain::RewindOutput` (LIP-0004 §7 as shipped).
+  Wire input may be decoded `mw_tx` bodies or LIP-0006 FULL_UTXO batches via
+  `bdk_mweb::lip0006` (feature `lip0006`: codecs, `sync_mweb_utxos`, `TcpMwebPeer`).
+  MVP security is trusted peer + rewind; full PMMR membership verify remains a follow-on.
 - Coins live in `MwebCoinDatabase` — never in transparent `IndexedTxGraph`.
 - Spend authors sorted inputs/outputs (Core `Transaction::Create`), change at address index `0`,
   fee (+ optional peg-in / peg-out) kernel with stealth excess.
 - Phase 5: `kernel_id` = Core `Kernel::GetHash`; `build_pegin` / `add_pegout`; regtest round-trip
   without Core holding MWEB keys.
-- Phase 6: **minimal facade** — `CombinedBalance`, `prepare_mweb_pegin` / `build_mweb_send` /
-  `build_mweb_pegout` on `Wallet` (feature `mweb`). Callers still own `MwebCoinDatabase`.
+- Phase 6: **minimal facade** — `CombinedBalance` (confirmed vs untrusted pending),
+  `prepare_mweb_pegin` / `build_mweb_send` / `build_mweb_pegout` on `Wallet` (feature `mweb`).
   No automatic domain routing in transparent `build_tx`.
 - **Parallel persist** (feature `persist` on `bdk_mweb`): serde/`Merge` `ChangeSet` staged on
-  `MwebCoinDatabase`, appendable via `bdk_file_store::Store` beside the wallet. Not folded into
-  `Wallet::ChangeSet`. Secrets (`blind`, `shared_secret`, `spend_key`) are spend-equivalent —
-  apps must encrypt at rest. SQLite-beside-wallet and wallet-owned DB remain follow-ons;
-  LIP-0006 still deferred.
+  `MwebCoinDatabase`, appendable via `bdk_file_store::Store` or SQLite (`rusqlite` feature).
+  Wallet [`MwebStore`] helpers load/persist beside the wallet. Not folded into
+  `Wallet::ChangeSet`. Secrets are spend-equivalent — encrypt at rest with feature `encrypt`
+  (`seal` / `seal_changeset`); apps own the key.
+- LIP-0006 `getmwebutxos` / leafset P2P sync: see `bdk_mweb::lip0006` (feature `lip0006`).
 
 ## False paths
 
