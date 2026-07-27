@@ -59,6 +59,9 @@ pub struct MwebCoin {
     /// Whether this output was created by a peg-in kernel (needs [`MWEB_PEGIN_MATURITY`]).
     #[cfg_attr(feature = "serde", serde(default))]
     pub is_pegin: bool,
+    /// Output PMMR leaf index when known (from LIP-0006 UTXO sync).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub leaf_index: Option<u64>,
 }
 
 impl MwebCoin {
@@ -97,6 +100,12 @@ impl MwebCoin {
     /// Mark as peg-in (builder-style).
     pub fn with_pegin(mut self, is_pegin: bool) -> Self {
         self.is_pegin = is_pegin;
+        self
+    }
+
+    /// Set PMMR leaf index (builder-style).
+    pub fn with_leaf_index(mut self, leaf_index: u64) -> Self {
+        self.leaf_index = Some(leaf_index);
         self
     }
 }
@@ -237,6 +246,36 @@ impl MwebCoinDatabase {
         true
     }
 
+    /// Set `leaf_index` on an unspent coin (stages when `persist` is enabled).
+    pub fn set_leaf_index(&mut self, output_id: &[u8; 32], leaf_index: u64) -> bool {
+        let Some(coin) = self.coins.get_mut(output_id) else {
+            return false;
+        };
+        coin.leaf_index = Some(leaf_index);
+        #[cfg(feature = "persist")]
+        {
+            self.staged.coins.insert(*output_id, coin.clone());
+        }
+        true
+    }
+
+    /// Find an unspent coin by PMMR leaf index.
+    pub fn find_by_leaf_index(&self, leaf_index: u64) -> Option<&MwebCoin> {
+        self.coins
+            .values()
+            .find(|c| c.leaf_index == Some(leaf_index))
+    }
+
+    /// Mark spent the unspent coin with `leaf_index`, if any.
+    pub fn mark_spent_by_leaf_index(&mut self, leaf_index: u64) -> Option<[u8; 32]> {
+        let id = self.find_by_leaf_index(leaf_index)?.output_id;
+        if self.mark_spent(&id) {
+            Some(id)
+        } else {
+            None
+        }
+    }
+
     /// Whether `output_id` is in the spent set.
     pub fn is_spent(&self, output_id: &[u8; 32]) -> bool {
         self.spent.contains_key(output_id)
@@ -303,6 +342,7 @@ mod tests {
             spend_key: Some([1; 32]),
             block_height: height,
             is_pegin,
+            leaf_index: None,
         }
     }
 

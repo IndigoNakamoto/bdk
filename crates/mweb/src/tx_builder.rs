@@ -254,6 +254,7 @@ fn assemble_body(
                     spend_key: Some(spend),
                     block_height: None,
                     is_pegin: pegin.is_some(),
+                    leaf_index: None,
                 });
             }
         }

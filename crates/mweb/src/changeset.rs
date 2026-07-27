@@ -60,6 +60,7 @@ mod tests {
             spend_key: Some([4; 32]),
             block_height: None,
             is_pegin: false,
+            leaf_index: None,
         }
     }
 

@@ -29,24 +29,107 @@ use crate::p2p::{
 pub struct TcpMwebPeer {
     stream: TcpStream,
     magic: Magic,
+    /// Peer address for reconnect (host:port form).
+    addr: String,
+    network: Network,
 }
 
 impl TcpMwebPeer {
     /// Connect and complete version/verack handshake.
     pub fn connect(addr: impl ToSocketAddrs, network: Network) -> Result<Self, Error> {
-        let stream = TcpStream::connect(addr)
+        let sock = addr
+            .to_socket_addrs()
+            .map_err(|e| Error::Crypto(alloc::format!("resolve: {e}")))?
+            .next()
+            .ok_or_else(|| Error::Crypto("no address resolved".into()))?;
+        Self::connect_sock(sock, sock.to_string(), network)
+    }
+
+    fn connect_sock(
+        sock: std::net::SocketAddr,
+        addr_str: String,
+        network: Network,
+    ) -> Result<Self, Error> {
+        let stream = TcpStream::connect(sock)
             .map_err(|e| Error::Crypto(alloc::format!("tcp connect: {e}")))?;
+        // Long UTXO syncs need generous timeouts (litecoind may stall under load).
         stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+            .set_read_timeout(Some(std::time::Duration::from_secs(180)))
             .ok();
         stream
-            .set_write_timeout(Some(std::time::Duration::from_secs(30)))
+            .set_write_timeout(Some(std::time::Duration::from_secs(60)))
             .ok();
         let magic = network.magic();
-        let mut peer = Self { stream, magic };
+        let mut peer = Self {
+            stream,
+            magic,
+            addr: addr_str,
+            network,
+        };
         peer.handshake()?;
         Ok(peer)
     }
+
+    /// Drop the socket and handshake again (same address).
+    pub fn reconnect(&mut self) -> Result<(), Error> {
+        let sock = self
+            .addr
+            .to_socket_addrs()
+            .map_err(|e| Error::Crypto(alloc::format!("resolve: {e}")))?
+            .next()
+            .ok_or_else(|| Error::Crypto("no address resolved".into()))?;
+        let fresh = Self::connect_sock(sock, self.addr.clone(), self.network)?;
+        *self = fresh;
+        Ok(())
+    }
+
+    fn is_transient(err: &Error) -> bool {
+        let msg = alloc::format!("{err}");
+        msg.contains("p2p read")
+            || msg.contains("p2p write")
+            || msg.contains("timed out")
+            || msg.contains("Connection reset")
+            || msg.contains("Broken pipe")
+            || msg.contains("connection abort")
+            || msg.contains("NotConnected")
+    }
+
+    fn with_reconnect<T>(
+        &mut self,
+        mut op: impl FnMut(&mut Self) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        // litecoind often drops light-client sockets under UTXO-sync load; back off
+        // and keep trying rather than failing the whole multi-hour download.
+        const MAX_ATTEMPTS: u32 = 12;
+        let mut attempt = 0u32;
+        loop {
+            match op(self) {
+                Ok(v) => return Ok(v),
+                Err(e) if Self::is_transient(&e) && attempt + 1 < MAX_ATTEMPTS => {
+                    attempt += 1;
+                    let sleep_ms = (500u64 * (1u64 << attempt.min(6))).min(30_000);
+                    #[cfg(feature = "std")]
+                    {
+                        eprintln!(
+                            "warn: P2P error ({e}); reconnecting to {} in {sleep_ms}ms (attempt {attempt}/{})…",
+                            self.addr,
+                            MAX_ATTEMPTS - 1
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                    }
+                    if let Err(re) = self.reconnect() {
+                        #[cfg(feature = "std")]
+                        eprintln!("warn: reconnect failed ({re}); will retry…");
+                        // Count this toward attempts; loop will retry op (which fails
+                        // fast on a dead stream) or succeed after a later reconnect.
+                        continue;
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
 
     fn handshake(&mut self) -> Result<(), Error> {
         let now = SystemTime::now()
@@ -183,29 +266,35 @@ impl TcpMwebPeer {
 
 impl MwebUtxoSource for TcpMwebPeer {
     fn get_header(&mut self, block_hash: BlockHash) -> Result<MwebHeaderMsg, Error> {
-        let inv: Vec<Inventory> = vec![mweb_inv(MSG_MWEB_HEADER, block_hash)];
-        self.send(NetworkMessage::GetData(inv))?;
-        let payload = self.recv_until_cmd("mwebheader")?;
-        let mut cursor = std::io::Cursor::new(payload);
-        MwebHeaderMsg::consensus_decode(&mut cursor)
-            .map_err(|e| Error::Crypto(alloc::format!("mwebheader decode: {e}")))
+        self.with_reconnect(|this| {
+            let inv: Vec<Inventory> = vec![mweb_inv(MSG_MWEB_HEADER, block_hash)];
+            this.send(NetworkMessage::GetData(inv))?;
+            let payload = this.recv_until_cmd("mwebheader")?;
+            let mut cursor = std::io::Cursor::new(payload);
+            MwebHeaderMsg::consensus_decode(&mut cursor)
+                .map_err(|e| Error::Crypto(alloc::format!("mwebheader decode: {e}")))
+        })
     }
 
     fn get_leafset(&mut self, block_hash: BlockHash) -> Result<MwebLeafset, Error> {
-        let inv: Vec<Inventory> = vec![mweb_inv(MSG_MWEB_LEAFSET, block_hash)];
-        self.send(NetworkMessage::GetData(inv))?;
-        let payload = self.recv_until_cmd("mwebleafset")?;
-        let mut cursor = std::io::Cursor::new(payload);
-        MwebLeafset::consensus_decode(&mut cursor)
-            .map_err(|e| Error::Crypto(alloc::format!("mwebleafset decode: {e}")))
+        self.with_reconnect(|this| {
+            let inv: Vec<Inventory> = vec![mweb_inv(MSG_MWEB_LEAFSET, block_hash)];
+            this.send(NetworkMessage::GetData(inv))?;
+            let payload = this.recv_until_cmd("mwebleafset")?;
+            let mut cursor = std::io::Cursor::new(payload);
+            MwebLeafset::consensus_decode(&mut cursor)
+                .map_err(|e| Error::Crypto(alloc::format!("mwebleafset decode: {e}")))
+        })
     }
 
     fn get_utxos(&mut self, req: GetMwebUtxos) -> Result<MwebUtxos, Error> {
-        let payload = serialize(&req);
-        self.send_cmd("getmwebutxos", &payload)?;
-        let resp = self.recv_until_cmd("mwebutxos")?;
-        let mut cursor = std::io::Cursor::new(resp);
-        MwebUtxos::consensus_decode(&mut cursor)
-            .map_err(|e| Error::Crypto(alloc::format!("mwebutxos decode: {e}")))
+        self.with_reconnect(|this| {
+            let payload = serialize(&req);
+            this.send_cmd("getmwebutxos", &payload)?;
+            let resp = this.recv_until_cmd("mwebutxos")?;
+            let mut cursor = std::io::Cursor::new(resp);
+            MwebUtxos::consensus_decode(&mut cursor)
+                .map_err(|e| Error::Crypto(alloc::format!("mwebutxos decode: {e}")))
+        })
     }
 }

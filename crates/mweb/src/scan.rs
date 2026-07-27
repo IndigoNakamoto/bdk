@@ -164,6 +164,7 @@ pub fn rewind_output(
         spend_key,
         block_height: None,
         is_pegin: false,
+        leaf_index: None,
     }))
 }
 
@@ -191,6 +192,27 @@ pub fn scan_outputs_at(
     for output in outputs {
         if let Some(mut coin) = rewind_output(keys, book, output, secp)? {
             coin.block_height = block_height;
+            db.insert(coin.clone());
+            found.push(coin);
+        }
+    }
+    Ok(found)
+}
+
+/// Scan FULL_UTXO entries, tagging each match with leaf index and optional height.
+pub fn scan_utxo_entries_at(
+    keys: &MasterKeys,
+    book: &AddressBook,
+    entries: &[(u64, mweb::Output)],
+    db: &mut MwebCoinDatabase,
+    secp: &Secp256k1<All>,
+    height_for_leaf: impl Fn(u64) -> Option<u32>,
+) -> Result<Vec<MwebCoin>, Error> {
+    let mut found = Vec::new();
+    for (leaf_index, output) in entries {
+        if let Some(mut coin) = rewind_output(keys, book, output, secp)? {
+            coin.leaf_index = Some(*leaf_index);
+            coin.block_height = height_for_leaf(*leaf_index);
             db.insert(coin.clone());
             found.push(coin);
         }

@@ -121,6 +121,7 @@ mod tests {
                 spend_key: Some([5; 32]),
                 block_height: Some(10),
                 is_pegin: false,
+                leaf_index: None,
             },
         );
         let sealed = seal_changeset(&key, &cs).unwrap();

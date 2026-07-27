@@ -1,6 +1,7 @@
 # MWEB architecture ADR (Phase 2+)
 
 Status: **Accepted** (2026-07-26); Phase 6 facade + parallel MWEB coin persist landed.  
+**Addendum (2026-07-27):** ltcsuite is the **reference** for PSBTv2 MWEB and light-client sync architecture (Losh). See [`LTCSUITE_ALIGNMENT.md`](LTCSUITE_ALIGNMENT.md).  
 Based on Gemini deep research post Phase 0–1; supersedes embedding Nexus/`lndltc` or gomobile-`mwebd` as the BDK library backend.
 
 ## Decision
@@ -11,9 +12,19 @@ Ship a native Rust crate **`bdk_mweb`** that:
 2. Uses **C-FFI** to consensus crypto (`libsecp256k1` MWEB modules / `secp256k1-zkp`), not pure-Rust Bulletproofs.
 3. Performs LIP-0006-style scan locally (scan key stays on-device).
 4. Preserves BDK’s **MIT OR Apache-2.0** license (no GPL `lndltc` / Nexus code).
+5. **Aligns library PSBT + sync with ltcsuite** (copy PSBTv2 MWEB key map from `ltcd/ltcutil/psbt`; shape continuous sync like `mwebsync`). Crypto and coin DB remain Rust.
 
 Phase 0–1 transparent bridge filtering remains. Core `sendtoaddress` finalize is still a supported
 alternate for peg-in, but BDK can author peg-in/out bodies itself (Phase 5).
+
+### Interim vs reference (PSBT)
+
+| Path | Role |
+| --- | --- |
+| **`attach_mweb_tx` after PSBT extract** | **Interim** spike / CLI (proven mainnet peg-in + Nexus send) |
+| **ltcsuite PSBTv2 MWEB fields** (`0x90+` input/output/kernel types) | **Reference** for library consumers — port into Rust `litecoin` + `bdk_wallet` |
+
+Do **not** invent a parallel proprietary key scheme. Do **not** embed Go.
 
 ## Rejected backends
 
@@ -21,12 +32,14 @@ alternate for peg-in, but BDK can author peg-in/out bodies itself (Phase 5).
 | --- | --- |
 | Nexus / `lndltc` | GPL-3.0; heavy NDK/CocoaPods; wrong product shape |
 | Embedded `mwebd` (gomobile) | Go runtime bloat, GC/battery cost, nested FFI |
-| Stuffing `mw_tx` into BIP174 PSBT | Breaks HW wallets; Core rejects MWEB in PSBT |
+| Stuffing raw `mw_tx` into BIP174 as opaque proprietary blob | Wrong interop story; use **ltcsuite PSBTv2 MWEB typed keys** instead |
 | Indexing HogAddr / v9 as UTXOs | Inflates transparent balance (Phase 0 forbids this) |
 | Elements CT `rangeproof_sign` for MWEB outputs | Wrong proof system (Borromean/CT, not 675-byte bulletproofs) |
 | Pure-Rust Bulletproofs | Consensus risk; ADR requires C-FFI |
+| Go FFI to ltcd/mwebsync | License/ops shape; **port semantics**, don’t ship a Go runtime |
 
 `mwebd` remains acceptable as an **external** server-side indexer, not an embedded dependency.
+ltcsuite (`ltcd` / `ltcwallet` / `mwebsync`, ISC) is the **read-and-port** reference, not a linked dependency.
 
 ## Bifurcated wallet state
 
@@ -107,7 +120,10 @@ A_i = a·B_i
 
 - Receive scan implements Litecoin Core `Keychain::RewindOutput` (LIP-0004 §7 as shipped).
   Wire input may be decoded `mw_tx` bodies or LIP-0006 FULL_UTXO batches via
-  `bdk_mweb::lip0006` (feature `lip0006`: codecs, `sync_mweb_at_tip`, `TcpMwebPeer`).
+  `bdk_mweb::lip0006` (feature `lip0006`: codecs, `sync_mweb_at_tip`, `TcpMwebPeer`)
+  and mwebsync-shaped [`mweb_sync::MwebSyncer`](../crates/mweb/src/mweb_sync.rs)
+  (differential leafset + tip-only / fine-window dating). PSBTv2 MWEB key maps live in
+  [`psbt`](../crates/mweb/src/psbt.rs) until the `litecoin` crate ships native types.
   Default verify mode is `HeaderAndPmmr` (leafset_root + segment parent_hashes vs
   `output_root`); `VerifyMode::Trusted` remains for scripted/tests.
 - Coins live in `MwebCoinDatabase` — never in transparent `IndexedTxGraph`.
@@ -126,13 +142,17 @@ A_i = a·B_i
 - LIP-0006 verified sync: `mwebheader` → `mwebleafset` → batched `mwebutxos` with
   PMMR checks (`bdk_mweb::pmmr`, feature `lip0006`). Tip seam is `(BlockHash, u32)` —
   Electrum stays outside the crate. Peg-in maturity = 6 (`MWEB_PEGIN_MATURITY`);
-  reorgs call `MwebStore::disconnect_from(height)`.
+  reorgs call `MwebStore::disconnect_from(height)`. Prefer `MwebSyncer` for receive /
+  confirmation dating; `sync_mweb_at_tip` remains as a one-shot helper.
+- **Next (ltcsuite parity):** absorb `bdk_mweb::psbt` into published `litecoin` PSBTv2; see
+  [`LTCSUITE_ALIGNMENT.md`](LTCSUITE_ALIGNMENT.md) and [`MWEB_PEER_OPS.md`](MWEB_PEER_OPS.md).
 
 ## False paths
 
-1. PSBT stuffing for `mw_tx`
+1. Opaque BIP174 proprietary `mw_tx` blobs (use ltcsuite PSBTv2 MWEB keys instead)
 2. Treating HogAddr / peg-in scripts as spendable UTXOs
 3. Routing empty MWEB `script_pubkey()` through transparent `TxBuilder` as a normal payment
 4. Embedding gomobile-`mwebd` in mobile BDK apps
 5. Reimplementing Bulletproofs in pure Rust
 6. Using Elements CT rangeproofs for MWEB output proofs
+7. Inventing a PSBT key map divergent from ltcsuite

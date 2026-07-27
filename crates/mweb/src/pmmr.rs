@@ -258,10 +258,11 @@ fn calc_pruned_parents(unspent: &[u8], num_leaves: u64) -> BTreeSet<u64> {
     if num_leaves == 0 || num_nodes_for_leaves(num_leaves) == 0 {
         return ret;
     }
-    let last_node = Index::at(num_nodes_for_leaves(num_leaves) - 1);
+    // Core `CalcPrunedParents`: `LeafIndex::At(num_leaves).GetNodeIndex()` (== next leaf pos).
+    let last_node_pos = num_nodes_for_leaves(num_leaves);
 
     let mut height = 1u64;
-    while (2u64 << height) - 2 <= last_node.position {
+    while (2u64 << height) - 2 <= last_node_pos {
         let mut sibling_num = 0u64;
         let base_inc = (2u64 << height) - 1;
         let mut next = Index {
@@ -282,7 +283,7 @@ fn calc_pruned_parents(unspent: &[u8], num_leaves: u64) -> BTreeSet<u64> {
                 };
             }
             sibling_num += 1;
-            if next.position > last_node.position {
+            if next.position > last_node_pos {
                 break;
             }
             let right = next.right_child();
@@ -431,35 +432,56 @@ pub fn verify_utxo_batch(
         }
     }
 
-    let first_leaf = batch.utxos.first().unwrap().leaf_index;
-    let last_leaf = batch.utxos.last().unwrap().leaf_index;
-    let hash_indices: Vec<u64> = calc_hash_indices(bits, num_leaves, first_leaf, last_leaf)
+    let leaf_hashes: Vec<(u64, [u8; 32])> = batch
+        .utxos
+        .iter()
+        .map(|e| (e.leaf_index, leaf_hash(e.leaf_index, &output_id(&e.output))))
+        .collect();
+    verify_segment_root(
+        &leaf_hashes,
+        &batch.parent_hashes,
+        bits,
+        num_leaves,
+        &header.output_root,
+    )
+}
+
+/// Core-style segment root check (leaf hashes + `parent_hashes` vs `output_root`).
+fn verify_segment_root(
+    leaf_hashes: &[(u64, [u8; 32])],
+    parent_hashes: &[[u8; 32]],
+    unspent_bits: &[u8],
+    num_leaves: u64,
+    output_root: &[u8; 32],
+) -> Result<(), Error> {
+    if leaf_hashes.is_empty() {
+        return Ok(());
+    }
+    let first_leaf = leaf_hashes.first().unwrap().0;
+    let last_leaf = leaf_hashes.last().unwrap().0;
+    let hash_indices: Vec<u64> = calc_hash_indices(unspent_bits, num_leaves, first_leaf, last_leaf)
         .into_iter()
         .collect();
 
     // Core appends lower_peak after segment.hashes when present.
-    let (proof_hashes, lower_peak) = if batch.parent_hashes.len() == hash_indices.len() {
-        (batch.parent_hashes.as_slice(), None)
-    } else if batch.parent_hashes.len() == hash_indices.len() + 1 {
-        let (proof, peak) = batch.parent_hashes.split_at(hash_indices.len());
+    let (proof_hashes, lower_peak) = if parent_hashes.len() == hash_indices.len() {
+        (parent_hashes, None)
+    } else if parent_hashes.len() == hash_indices.len() + 1 {
+        let (proof, peak) = parent_hashes.split_at(hash_indices.len());
         (proof, Some(peak[0]))
-    } else if hash_indices.is_empty() && batch.parent_hashes.len() <= 1 {
-        (&[][..], batch.parent_hashes.first().copied())
+    } else if hash_indices.is_empty() && parent_hashes.len() <= 1 {
+        (&[][..], parent_hashes.first().copied())
     } else {
         return Err(Error::Crypto(alloc::format!(
             "parent_hashes len {} != hash_indices {} (or +1 lower_peak)",
-            batch.parent_hashes.len(),
+            parent_hashes.len(),
             hash_indices.len()
         )));
     };
 
     let mut nodes: BTreeMap<u64, [u8; 32]> = BTreeMap::new();
-    for entry in &batch.utxos {
-        let oid = output_id(&entry.output);
-        nodes.insert(
-            leaf_position(entry.leaf_index),
-            leaf_hash(entry.leaf_index, &oid),
-        );
+    for &(leaf_idx, hash) in leaf_hashes {
+        nodes.insert(leaf_position(leaf_idx), hash);
     }
     for (pos, hash) in hash_indices.iter().zip(proof_hashes.iter()) {
         nodes.insert(*pos, *hash);
@@ -484,7 +506,6 @@ pub fn verify_utxo_batch(
     }
 
     let peaks = peak_indices(num_nodes);
-    let first_node_pos = leaf_position(first_leaf);
     let last_node = Index::at(leaf_position(last_leaf));
     let mountain_peak_pos = peaks
         .iter()
@@ -492,18 +513,22 @@ pub fn verify_utxo_batch(
         .map(|p| p.position)
         .ok_or_else(|| Error::Crypto("missing mountain peak".into()))?;
 
-    // Peaks left of the segment + the mountain peak we can compute.
+    // Bag every peak from the left through the mountain that contains `last_leaf`.
+    // Segments often span multiple mountains; skipping intermediate peaks (the old
+    // "left-of-first + mountain only" approach) yields a false output_root mismatch.
+    // Left peaks come from `parent_hashes`; in-range peaks are rebuilt from leaves.
     let mut left_and_mountain: Vec<[u8; 32]> = Vec::new();
     for peak in &peaks {
-        if peak.position < first_node_pos || peak.position == mountain_peak_pos {
-            let h = nodes.get(&peak.position).ok_or_else(|| {
-                Error::Crypto("missing peak hash for segment verify".into())
-            })?;
-            left_and_mountain.push(*h);
-            if peak.position == mountain_peak_pos {
-                break;
-            }
+        if peak.position > mountain_peak_pos {
+            break;
         }
+        let h = nodes.get(&peak.position).ok_or_else(|| {
+            Error::Crypto(alloc::format!(
+                "missing peak hash at {} for segment verify (leaves {first_leaf}..{last_leaf})",
+                peak.position
+            ))
+        })?;
+        left_and_mountain.push(*h);
     }
 
     let root = match lower_peak {
@@ -530,10 +555,59 @@ pub fn verify_utxo_batch(
         }
     };
 
-    if root != header.output_root {
-        return Err(Error::Crypto("output_root mismatch".into()));
+    if root != *output_root {
+        return Err(Error::Crypto(alloc::format!(
+            "output_root mismatch (leaves {first_leaf}..{last_leaf}, utxos={}, parent_hashes={})",
+            leaf_hashes.len(),
+            parent_hashes.len()
+        )));
     }
     Ok(())
+}
+
+/// Bag peaks from `peak_idx` through the rightmost peak (Core `CalcBaggedPeak`).
+#[cfg(test)]
+fn calc_bagged_peak(mmr: &MemMmr, peak_idx_pos: u64) -> Option<[u8; 32]> {
+    let num_nodes = num_nodes_for_leaves(mmr.num_leaves());
+    let peaks = peak_indices(num_nodes);
+    let mut bagged: Option<[u8; 32]> = None;
+    for peak in peaks.iter().rev() {
+        let peak_hash = mmr.hash_at(peak.position);
+        bagged = Some(match bagged {
+            Some(b) => parent_hash(num_nodes, &peak_hash, &b),
+            None => peak_hash,
+        });
+        if peak.position == peak_idx_pos {
+            return bagged;
+        }
+    }
+    None
+}
+
+/// Assemble Core-style segment parent hashes for tests.
+#[cfg(test)]
+fn assemble_parent_hashes(
+    mmr: &MemMmr,
+    unspent_bits: &[u8],
+    first_leaf: u64,
+    last_leaf: u64,
+) -> Vec<[u8; 32]> {
+    let num_leaves = mmr.num_leaves();
+    let hash_indices = calc_hash_indices(unspent_bits, num_leaves, first_leaf, last_leaf);
+    let mut hashes: Vec<[u8; 32]> = hash_indices
+        .iter()
+        .map(|pos| mmr.hash_at(*pos))
+        .collect();
+    let peaks = peak_indices(num_nodes_for_leaves(num_leaves));
+    let last_node = Index::at(leaf_position(last_leaf));
+    if let Some(mountain) = peaks.iter().find(|p| p.position >= last_node.position) {
+        if let Some(next) = peaks.iter().find(|p| p.position > mountain.position) {
+            if let Some(lp) = calc_bagged_peak(mmr, next.position) {
+                hashes.push(lp);
+            }
+        }
+    }
+    hashes
 }
 
 /// Convenience: leaf hashes for a list of outputs (testing / scripting).
@@ -633,5 +707,98 @@ mod tests {
             leafset: leafset_bytes,
         };
         verify_leafset(&ls, &header.leafset_root, header.output_mmr_size).unwrap();
+    }
+
+    fn all_unspent_bits(num_leaves: u64) -> Vec<u8> {
+        let indices: Vec<u64> = (0..num_leaves).collect();
+        MwebLeafset::from_indices(BlockHash::from_byte_array([9u8; 32]), &indices).leafset
+    }
+
+    fn build_mmr(n: u64) -> MemMmr {
+        let mut mmr = MemMmr::new();
+        for i in 0..n {
+            let mut id = [0u8; 32];
+            id[..8].copy_from_slice(&i.to_le_bytes());
+            mmr.add_output_id(id);
+        }
+        mmr
+    }
+
+    /// Port of litecoind `Test_Segment/AssembleSegment` (15 leaves, request 4 from 0).
+    #[test]
+    fn core_assemble_segment_hash_indices_and_root() {
+        let mmr = build_mmr(15);
+        let bits = all_unspent_bits(15);
+        let indices = calc_hash_indices(&bits, 15, 0, 3);
+        assert_eq!(indices.iter().copied().collect::<Vec<_>>(), vec![13]);
+
+        let parent_hashes = assemble_parent_hashes(&mmr, &bits, 0, 3);
+        // one proof hash + lower_peak
+        assert_eq!(parent_hashes.len(), 2);
+
+        let leaf_hashes: Vec<(u64, [u8; 32])> = (0u64..=3)
+            .map(|i| {
+                let mut id = [0u8; 32];
+                id[..8].copy_from_slice(&i.to_le_bytes());
+                (i, leaf_hash(i, &id))
+            })
+            .collect();
+        verify_segment_root(&leaf_hashes, &parent_hashes, &bits, 15, &mmr.root()).unwrap();
+    }
+
+    /// Segment spanning two mountains (leaves 6..=9 under peaks 14 and 21).
+    #[test]
+    fn multi_mountain_segment_verifies() {
+        let mmr = build_mmr(15);
+        let bits = all_unspent_bits(15);
+        let first = 6u64;
+        let last = 9u64;
+        // Distinct mountain peaks for first vs last.
+        let peaks = peak_indices(num_nodes_for_leaves(15));
+        let first_peak = peaks
+            .iter()
+            .find(|p| p.position >= leaf_position(first))
+            .unwrap()
+            .position;
+        let last_peak = peaks
+            .iter()
+            .find(|p| p.position >= leaf_position(last))
+            .unwrap()
+            .position;
+        assert_ne!(first_peak, last_peak, "test requires a multi-mountain span");
+
+        let parent_hashes = assemble_parent_hashes(&mmr, &bits, first, last);
+        let leaf_hashes: Vec<(u64, [u8; 32])> = (first..=last)
+            .map(|i| {
+                let mut id = [0u8; 32];
+                id[..8].copy_from_slice(&i.to_le_bytes());
+                (i, leaf_hash(i, &id))
+            })
+            .collect();
+        verify_segment_root(&leaf_hashes, &parent_hashes, &bits, 15, &mmr.root()).unwrap();
+    }
+
+    #[test]
+    fn multi_mountain_with_spent_gap_verifies() {
+        let mmr = build_mmr(15);
+        // Spend leaf 8 (gap between 7 and 9).
+        let bits = MwebLeafset::from_indices(
+            BlockHash::from_byte_array([9u8; 32]),
+            &[0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14],
+        )
+        .leafset;
+        let first = 6u64;
+        let last = 10u64;
+        let parent_hashes = assemble_parent_hashes(&mmr, &bits, first, last);
+        // Only unspent leaves in the requested window.
+        let leaf_hashes: Vec<(u64, [u8; 32])> = [6u64, 7, 9, 10]
+            .into_iter()
+            .map(|i| {
+                let mut id = [0u8; 32];
+                id[..8].copy_from_slice(&i.to_le_bytes());
+                (i, leaf_hash(i, &id))
+            })
+            .collect();
+        verify_segment_root(&leaf_hashes, &parent_hashes, &bits, 15, &mmr.root()).unwrap();
     }
 }

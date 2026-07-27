@@ -131,8 +131,9 @@ See [`MWEB_PEGIN.md`](MWEB_PEGIN.md) for the spike vectors and Core-finalize dec
 Electrum/Esplora/RPC → Wallet::apply_update / apply_block
   → tip = wallet.latest_checkpoint()
   → (on shorter tip) MwebStore::disconnect_from(new_tip + 1)
-  → sync_mweb_at_tip(TcpMwebPeer | scripted, tip_hash, tip_height, HeaderAndPmmr)
-  → persist MwebStore
+  → MwebSyncer::run_once (differential leafset + fine-window dating)
+     or sync_mweb_at_tip (one-shot full UTXO download at tip height)
+  → persist MwebStore (+ optional mweb_sync.json SyncState)
 ```
 
 1. Author peg-in with `Wallet::prepare_mweb_pegin` (feature `mweb`), sign, `attach_mweb_tx`, broadcast
@@ -140,9 +141,11 @@ Electrum/Esplora/RPC → Wallet::apply_update / apply_block
 2. Mine peg-in maturity (`MWEB_PEGIN_MATURITY` = 6), sync transparent tip with `apply_block`.
 3. Optional reorg: `MwebStore::disconnect_from(fork_height)`.
 4. Verified LIP sync: `TcpMwebPeer::connect(env.p2p_addr(), …)` +
-   `MwebStore::sync_at_tip(..., HeaderAndPmmr)` (or `bdk_mweb::lip0006::sync_mweb_at_tip`).
+   `MwebStore::sync_differential` / `bdk_mweb::mweb_sync::MwebSyncer`
+   (or legacy `sync_at_tip` / `sync_mweb_at_tip`).
 5. Persist beside the wallet: `MwebStore::persist_file_store` / `mweb-sqlite`. Encrypt with
-   `bdk_mweb::seal` / `seal_changeset`.
+   `bdk_mweb::seal` / `seal_changeset`. Persist `SyncState` (`leafset` + height map) beside the store
+   so the next pass only downloads **added** leaves.
 6. Peg-out / send from **spendable** coins (`unspent_spendable` / maturity gate):
    `build_mweb_pegout` / `build_mweb_send` (`*_with(..., include_unconfirmed)` bypass).
 
@@ -151,8 +154,61 @@ No separate Electrum+MWEB binary is required for regtest; the tip seam is identi
 Example:
 
 ```bash
-cargo run -p bdk_wallet --example mweb_regtest --features "mweb,file_store,test-utils"
+cargo run --example mweb_regtest --features "mweb,file_store,test-utils"
 ```
+
+### BDK ↔ Nexus (mainnet)
+
+Use the existing transparent wallet from `mainnet_receive` plus the `mainnet_mweb` CLI.
+Nexus on your phone is only an address/tx counterparty (no Nexus code in BDK).
+
+```bash
+cd bdk_wallet
+# 1) Print BDK ltcmweb1… for Nexus to pay (or copy Nexus receive into send --to)
+cargo run --example mainnet_mweb --features "mweb,file_store,rusqlite" -- address
+
+# 2) Peg dust from transparent into MWEB (wait 6 confirmations before spending)
+cargo run --example mainnet_mweb --features "mweb,file_store,rusqlite" -- pegin --amount 0.001
+
+# 3) Send MWEB → Nexus
+cargo run --example mainnet_mweb --features "mweb,file_store,rusqlite" -- \
+  send --to ltcmweb1… --amount 0.0005
+
+# 4a) Receive from Nexus: LIP sync (needs a reachable mainnet litecoind P2P)
+#     See [`MWEB_PEER_OPS.md`](MWEB_PEER_OPS.md). After IBD (`initialblockdownload=false`):
+export LITECOIN_P2P=127.0.0.1:9333
+#     First sync tip-dates by default; MWEB_FINE_SYNC=1 for fine-window dating.
+cargo run --example mainnet_mweb --features "mweb,file_store,rusqlite" -- sync
+
+# 4b) Or paste raw tx hex (no litecoind / no IBD) after Nexus payment is on explorers
+cargo run --example mainnet_mweb --features "mweb,file_store,rusqlite" -- \
+  scan-tx --hex <rawtx>
+
+# 5) Peg out to a fresh BIP84 ltc1… (or --to)
+cargo run --example mainnet_mweb --features "mweb,file_store,rusqlite" -- pegout --amount 0.0005
+
+cargo run --example mainnet_mweb --features "mweb,file_store,rusqlite" -- balance
+```
+
+Secrets / store (keep private):
+
+- `mainnet-e2e-wallet/SECRET_DO_NOT_SHARE.txt` — transparent BIP84
+- `mainnet-e2e-wallet/mweb_SECRET.txt` — MWEB `LitecoinCore` seed (Nexus-compatible)
+- `mainnet-e2e-wallet/mweb.db` — `MwebStore` (magic `bdk_mweb_v2`; pre-`leaf_index` v1 files are
+  auto-backed-up and rebuilt on `sync`)
+- `mainnet-e2e-wallet/mweb_sync.json` — differential sync cursor (`SyncState`)
+
+If Esplora rejects an MWEB-only broadcast, set `LITECOIN_RPC_URL` (+ `LITECOIN_RPC_USER` /
+`LITECOIN_RPC_PASS`) for `sendrawtransaction`. Peg-in maturity is **6** blocks
+(`MWEB_PEGIN_MATURITY`) before `send` / `pegout` select coins.
+
+### Mainnet LIP sync status (Phase 0)
+
+- litecoind IBD complete (`blocks == headers`, `initialblockdownload=false`) and P2P `9333` accepts
+  `TcpMwebPeer` (validated 2026-07-27).
+- First differential sync downloads the **full** tip leafset UTXO set (can take a long time); later
+  passes are incremental via `mweb_sync.json`. Tip-only dating is the default on empty SyncState.
+- Peer ops: [`MWEB_PEER_OPS.md`](MWEB_PEER_OPS.md).
 
 ## Notes
 

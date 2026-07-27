@@ -10,7 +10,10 @@ MWEB primitives for the Litecoin BDK fork:
 - Feature `persist`: parallel `ChangeSet` for file_store
 - Feature `rusqlite`: SQLite-beside-wallet tables
 - Feature `encrypt` / `encrypt-changeset`: ChaCha20-Poly1305 seal helpers
-- Feature `lip0006`: LIP-0006 codecs, `sync_mweb_utxos`, scripted + TCP peers (trusted-peer MVP)
+- Feature `lip0006`: LIP-0006 codecs, `sync_mweb_utxos`, `mweb_sync::MwebSyncer`
+  (differential leafset + fine/tip-only dating, multi-peer failover)
+- `psbt` module: ltcsuite `0x90+` MWEB PSBT maps + `MwebPsbt` extract helpers (until upstream
+  `litecoin` PSBTv2)
 
 Wallet integration (feature `mweb` on `bdk_wallet`): `CombinedBalance`, `MwebStore`,
 `prepare_mweb_pegin`, `build_mweb_send`, `build_mweb_pegout`.
@@ -21,7 +24,7 @@ Wallet integration (feature `mweb` on `bdk_wallet`): `CombinedBalance`, `MwebSto
 use bdk_file_store::Store;
 use bdk_mweb::{ChangeSet, MwebCoinDatabase};
 
-const MAGIC: &[u8] = b"bdk_mweb_v1";
+const MAGIC: &[u8] = b"bdk_mweb_v2";
 
 let staged = db.take_staged();
 store.append(&staged)?;

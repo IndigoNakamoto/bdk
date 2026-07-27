@@ -18,6 +18,7 @@ fn sample_coin(id: u8, amount: u64) -> MwebCoin {
         spend_key: Some([0x0d; 32]),
         block_height: Some(42),
         is_pegin: false,
+        leaf_index: Some(7),
     }
 }
 
@@ -40,6 +41,7 @@ fn insert_persist_reload_roundtrip() {
     assert_eq!(loaded.balance(), 125_000);
     assert_eq!(loaded.get(&c1.output_id), Some(&c1));
     assert_eq!(loaded.get(&c2.output_id).unwrap().block_height, Some(42));
+    assert_eq!(loaded.get(&c2.output_id).unwrap().leaf_index, Some(7));
 }
 
 #[test]

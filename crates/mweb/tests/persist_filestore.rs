@@ -6,7 +6,7 @@ use bdk_core::Merge;
 use bdk_file_store::Store;
 use bdk_mweb::{MwebCoin, MwebCoinDatabase};
 
-const MAGIC: &[u8] = b"bdk_mweb_v1";
+const MAGIC: &[u8] = b"bdk_mweb_v2";
 
 fn sample_coin(id: u8, amount: u64) -> MwebCoin {
     let mut output_id = [0u8; 32];
@@ -21,6 +21,7 @@ fn sample_coin(id: u8, amount: u64) -> MwebCoin {
         spend_key: Some([0x0d; 32]),
         block_height: Some(100),
         is_pegin: false,
+        leaf_index: None,
     }
 }
 

@@ -22,10 +22,12 @@ use crate::p2p::{
     GetMwebUtxos, MwebHeaderMsg, MwebLeafset, MwebUtxos, OUTPUT_FORMAT_FULL,
 };
 use crate::pmmr::{verify_leafset, verify_utxo_batch};
-use crate::scan::{scan_outputs_at, AddressBook};
+use crate::scan::{scan_utxo_entries_at, AddressBook};
 
-/// Default batch size for `getmwebutxos`.
-pub const DEFAULT_UTXO_BATCH: u16 = 100;
+/// Default batch size for `getmwebutxos` (peer returns up to this many unspent UTXOs).
+///
+/// [`MwebSyncer`] still halves and retries on rare PMMR verify failures.
+pub const DEFAULT_UTXO_BATCH: u16 = 500;
 
 /// How strictly to verify LIP-0006 payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -106,7 +108,7 @@ pub fn sync_mweb_utxos<S: MwebUtxoSource>(
         ..SyncResult::default()
     };
     let mut all_output_ids = BTreeSet::new();
-    let mut outputs: Vec<Output> = Vec::new();
+    let mut entries: Vec<(u64, Output)> = Vec::new();
 
     let mut i = 0usize;
     while i < indices.len() {
@@ -134,7 +136,7 @@ pub fn sync_mweb_utxos<S: MwebUtxoSource>(
         for entry in &batch.utxos {
             let oid = crate::scan::output_id(&entry.output);
             all_output_ids.insert(oid);
-            outputs.push(entry.output.clone());
+            entries.push((entry.leaf_index, entry.output.clone()));
         }
         result.downloaded = result.downloaded.saturating_add(batch.utxos.len());
         let last_leaf = batch.utxos.last().map(|e| e.leaf_index).unwrap_or(start);
@@ -143,7 +145,7 @@ pub fn sync_mweb_utxos<S: MwebUtxoSource>(
         }
     }
 
-    result.found = scan_outputs_at(keys, book, &outputs, db, secp, tip_height)?;
+    result.found = scan_utxo_entries_at(keys, book, &entries, db, secp, |_| tip_height)?;
 
     let local: Vec<[u8; 32]> = db.unspent().map(|c| c.output_id).collect();
     for id in local {
