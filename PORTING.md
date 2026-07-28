@@ -144,7 +144,9 @@ Architecture ADR: [`docs/MWEB_ARCHITECTURE.md`](docs/MWEB_ARCHITECTURE.md).
 - **Electrum-first** regtest chain source (`litecoind` + `electrs-ltc`). No regtest Esplora.
 - **Not** embedding Nexus/`lndltc` (GPL) or gomobile-`mwebd`.
 - **ltcsuite reference:** copy PSBTv2 MWEB + align sync with `mwebsync` — see
-  [`docs/LTCSUITE_ALIGNMENT.md`](docs/LTCSUITE_ALIGNMENT.md).
+  [`docs/LTCSUITE_ALIGNMENT.md`](docs/LTCSUITE_ALIGNMENT.md). Golden fixtures live in
+  `crates/mweb/tests/fixtures/` (regen: `scripts/ltcd_mweb_fixtures`). Legacy ltcwallet
+  path `m/1000'/2'/…` is intentionally unsupported.
 
 **Also landed:** LIP-0006 verified sync (`mwebheader` / leafset_root / PMMR parent_hashes,
 `VerifyMode::HeaderAndPmmr` default) + `sync_mweb_at_tip` / `TcpMwebPeer` (feature

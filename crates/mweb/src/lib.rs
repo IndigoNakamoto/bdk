@@ -37,6 +37,7 @@ mod serde_util;
 pub mod sqlite;
 pub mod psbt;
 pub mod psbt_fund;
+pub mod psbt_ltcd;
 pub mod tx_builder;
 
 pub use address::{is_mweb_address, parse_mweb_address, receive_address};
@@ -64,6 +65,7 @@ pub use psbt_fund::{
     change_from_funded, fund_mweb_pegin, fund_mweb_spend, sign_funded_mweb, sign_funded_mweb_pegin,
     FundedMwebPegin, FundedMwebPsbt, StagedMwebOutput,
 };
+pub use psbt_ltcd::psbt_from_ltcd_v2;
 pub use scan::{
     output_id, rewind_output, scan_litecoin_tx, scan_litecoin_tx_at, scan_mweb_tx, scan_mweb_tx_at,
     scan_outputs, scan_outputs_at, scan_utxo_entries_at, AddressBook, DEFAULT_GAP_LIMIT,

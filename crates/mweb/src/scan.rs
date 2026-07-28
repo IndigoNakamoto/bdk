@@ -290,10 +290,63 @@ mod tests {
     use crate::crypto::schnorr_sign;
     use crate::hash::blake3_hash;
     use crate::keys::{MasterKeyScheme, MasterKeys};
-    use crate::tx_builder::create_output;
+    use crate::tx_builder::create_output_with_sender;
     use bitcoin::bip32::{DerivationPath, Fingerprint};
+    use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::{Network, NetworkKind};
     use hex_conservative::FromHex;
+
+    const KEYCHAIN_SEED: &str =
+        "2a64df085eefedd8bfdbb33176b5ba2e62e8be8b56c8837795598bb6c440c064";
+
+    fn fixture_hex(name: &str) -> Vec<u8> {
+        let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+        let s = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {path}: {e}"))
+            .trim()
+            .to_string();
+        <Vec<u8>>::from_hex(&s).unwrap()
+    }
+
+    fn multi_index_sender(vec_idx: usize) -> [u8; 32] {
+        let mut sender = [0u8; 32];
+        sender[0] = (vec_idx + 1) as u8;
+        for j in 1..32 {
+            sender[j] = (0xaa + vec_idx) as u8;
+        }
+        sender
+    }
+
+    fn keychain_keys(secp: &Secp256k1<All>) -> MasterKeys {
+        let seed = <[u8; 32]>::from_hex(KEYCHAIN_SEED).unwrap();
+        MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::LitecoinCore, secp)
+            .unwrap()
+    }
+
+    /// Prefix through OutputMessage (excludes range proof + signature).
+    /// Go `ltcsuite/secp256k1` and Rust `grin_secp256k1zkp` bulletproofs are not
+    /// byte-identical, so full-wire equality is not expected across stacks.
+    fn output_preimage_prefix(out: &mweb::Output) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&out.commitment);
+        v.extend_from_slice(&out.sender_public_key.serialize());
+        v.extend_from_slice(&out.receiver_public_key.serialize());
+        v.extend_from_slice(&serialize(&out.message));
+        v
+    }
+
+    fn assert_matches_go_preimage(rust_out: &mweb::Output, go_raw: &[u8], label: &str) {
+        let go_out: mweb::Output = deserialize(go_raw).unwrap();
+        assert_eq!(
+            output_preimage_prefix(rust_out),
+            output_preimage_prefix(&go_out),
+            "{label}: commitment/keys/message must match Go createOutput"
+        );
+        assert_eq!(rust_out.commitment, go_out.commitment);
+        assert_eq!(rust_out.sender_public_key, go_out.sender_public_key);
+        assert_eq!(rust_out.receiver_public_key, go_out.receiver_public_key);
+        assert_eq!(rust_out.message, go_out.message);
+    }
 
     fn ltcd_coin_output() -> mweb::Output {
         use bitcoin::secp256k1::PublicKey;
@@ -423,39 +476,59 @@ mod tests {
         );
     }
 
-    /// Port of ltcd `TestRewindWrongScanKey`.
+    /// Port of ltcd `TestRewindWrongScanKey` (`keychain_test.go`).
     #[test]
     fn ltcd_rewind_wrong_scan_key_fails() {
         let secp = Secp256k1::new();
-        let seed = [0x5Au8; 32];
-        let keys =
-            MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap();
-        let addr = keys.address(0, NetworkKind::Test, &secp).unwrap();
-        let (_, _, output) = create_output(&addr, 500_000, &secp).unwrap();
+        let raw = fixture_hex("output_wrong_scan_target.hex");
+        let output: mweb::Output = deserialize(&raw).unwrap();
 
-        let mut wrong = keys.clone();
-        wrong.scan = bitcoin::secp256k1::SecretKey::from_slice(&[0x11u8; 32]).unwrap();
-        let book = AddressBook::from_keys(&wrong, 20, &secp).unwrap();
-        assert!(rewind_output(&wrong, &book, &output, &secp)
+        // Go uses 0xff…ff; that scalar is invalid in rust-secp256k1, so use a
+        // different valid-but-wrong scan secret (same failure mode: view tag).
+        let keys = keys_from_secrets(
+            "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364139",
+            "2fe1982b98c0b68c0839421c8a0a0a67ef3198c746ab8e6d09101eb7396a44d8",
+        );
+        let book = AddressBook::from_keys(&keys, 20, &secp).unwrap();
+        assert!(rewind_output(&keys, &book, &output, &secp)
             .unwrap()
             .is_none());
+
+        let good = keychain_keys(&secp);
+        let sender = <[u8; 32]>::from_hex(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let addr = good.address(0, NetworkKind::Main, &secp).unwrap();
+        let (_, _, made) =
+            create_output_with_sender(&addr, 500_000, &sender, &secp).unwrap();
+        assert_matches_go_preimage(&made, &raw, "wrong-scan target");
+
+        let book = AddressBook::from_keys(&good, 20, &secp).unwrap();
+        assert!(rewind_output(&good, &book, &made, &secp)
+            .unwrap()
+            .is_some());
+        assert!(rewind_output(&good, &book, &output, &secp)
+            .unwrap()
+            .is_some());
     }
 
-    /// Port of ltcd `TestOutputRoundTrip` (index 0).
+    /// Port of ltcd `TestOutputRoundTrip` (index 0, sender deadbeef…).
     #[test]
     fn ltcd_output_roundtrip_index_zero() {
         let secp = Secp256k1::new();
-        let seed = <[u8; 32]>::from_hex(
-            "2a64df085eefedd8bfdbb33176b5ba2e62e8be8b56c8837795598bb6c440c064",
-        )
-        .unwrap();
-        let keys =
-            MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap();
+        let keys = keychain_keys(&secp);
         let addr = keys.address(0, NetworkKind::Main, &secp).unwrap();
         let amount = 1_234_567u64;
-        let (_, _, output) = create_output(&addr, amount, &secp).unwrap();
+        let sender = <[u8; 32]>::from_hex(
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        )
+        .unwrap();
+        let (_, _, output) =
+            create_output_with_sender(&addr, amount, &sender, &secp).unwrap();
+
+        let raw = fixture_hex("output_roundtrip_index0_deadbeef.hex");
+        assert_matches_go_preimage(&output, &raw, "index0 deadbeef");
 
         let book = AddressBook::from_keys(&keys, 20, &secp).unwrap();
         let coin = rewind_output(&keys, &book, &output, &secp)
@@ -464,10 +537,53 @@ mod tests {
         assert_eq!(coin.amount, amount);
         assert_eq!(coin.address_index, 0);
 
-        // Recovered spend key pubkey must match receiver pubkey.
         let spend = coin.spend_key.expect("spend key");
         let sk = bitcoin::secp256k1::SecretKey::from_slice(&spend).unwrap();
         let got = PublicKey::from_secret_key(&secp, &sk);
         assert_eq!(got, output.receiver_public_key);
+
+        let go_out: mweb::Output = deserialize(&raw).unwrap();
+        let go_coin = rewind_output(&keys, &book, &go_out, &secp)
+            .unwrap()
+            .expect("rewind go fixture");
+        assert_eq!(go_coin.amount, amount);
+        assert_eq!(go_coin.address_index, 0);
+    }
+
+    /// Port of ltcd `TestOutputRoundTripMultipleIndices` (`keychain_test.go`).
+    #[test]
+    fn ltcd_output_roundtrip_multiple_indices() {
+        let secp = Secp256k1::new();
+        let keys = keychain_keys(&secp);
+        let book = AddressBook::from_keys(&keys, 20, &secp).unwrap();
+        let cases = [(0usize, 0u32, 100_000u64), (1, 1, 200_000), (2, 10, 300_000)];
+
+        for (vec_idx, index, amount) in cases {
+            let addr = keys.address(index, NetworkKind::Main, &secp).unwrap();
+            let sender = multi_index_sender(vec_idx);
+            let (_, _, output) =
+                create_output_with_sender(&addr, amount, &sender, &secp).unwrap();
+
+            let raw = fixture_hex(&format!("output_roundtrip_{index}.hex"));
+            assert_matches_go_preimage(&output, &raw, &format!("index {index}"));
+
+            let coin = rewind_output(&keys, &book, &output, &secp)
+                .unwrap()
+                .unwrap_or_else(|| panic!("index {index}: rewind"));
+            assert_eq!(coin.amount, amount);
+            assert_eq!(coin.address_index, index);
+
+            let spend = coin.spend_key.expect("spend key");
+            let sk = bitcoin::secp256k1::SecretKey::from_slice(&spend).unwrap();
+            let got = PublicKey::from_secret_key(&secp, &sk);
+            assert_eq!(got, output.receiver_public_key);
+
+            let go_out: mweb::Output = deserialize(&raw).unwrap();
+            let go_coin = rewind_output(&keys, &book, &go_out, &secp)
+                .unwrap()
+                .unwrap_or_else(|| panic!("index {index}: rewind go"));
+            assert_eq!(go_coin.amount, amount);
+            assert_eq!(go_coin.address_index, index);
+        }
     }
 }

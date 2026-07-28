@@ -154,4 +154,32 @@ What already matches: LIP-0006 message order, leafset blake3, PMMR `output_root`
 - Vendoring Go / FFI to ltcd  
 - Replacing zkp FFI with Go `mw`  
 - Nexus/GPL embedding  
-- Inventing a different PSBT key map
+- Inventing a different PSBT key map  
+- Supporting ltcwallet **legacy** MWEB HD scope `m/1000'/2'/…` (`KeyScopeMwebLegacy`) —
+  only Core `m/0'/100'/{0,1}'` and explicit `MasterKeyScheme::Lip0004`  
+- Porting ltcwallet aezeed / import / recovery / routing tests or mwebsync Go suites
+  (BDK wallet + `MwebSyncer` coverage is Rust-native)
+
+---
+
+## 5. Test parity (golden fixtures)
+
+Port **data**, not Go test logic:
+
+| Source | In-tree |
+| --- | --- |
+| ltcd `keychain_test` / ltcwallet `mweb_compat` vectors | `bdk_mweb` unit tests (`ltcd_*`) + master scan/spend **pubkeys** |
+| Multi-index `createOutput` + wrong-scan target | Go dumps under [`crates/mweb/tests/fixtures/`](../crates/mweb/tests/fixtures/); Rust asserts commitment/keys/message preimage match (bulletproofs differ across `ltcsuite/secp256k1` vs `grin_secp256k1zkp`) |
+| `TestSignMwebComponents` / `TestExtract_ValidMWEB` / kernel all-fields | Same fixtures dir; ingest via [`psbt_from_ltcd_v2`](../crates/mweb/src/psbt_ltcd.rs) (ltcd PSBTv2 ≠ rust-litecoin v0 global encoding) |
+
+Regenerate (dev machine with Go + CGO, not CI):
+
+```bash
+cd scripts/ltcd_mweb_fixtures
+git clone --depth 1 https://github.com/ltcsuite/ltcd.git vendor-ltcd   # once
+CGO_ENABLED=1 go run .
+cargo test -p bdk_mweb --lib -- ltcd_
+cargo test -p bdk_mweb --test ltcd_psbt_fixtures
+```
+
+See [`scripts/ltcd_mweb_fixtures/README.md`](../scripts/ltcd_mweb_fixtures/README.md).

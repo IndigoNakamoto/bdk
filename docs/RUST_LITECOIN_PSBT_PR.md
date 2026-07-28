@@ -4,10 +4,19 @@ Status: **PR open** — https://github.com/rust-litecoin/rust-litecoin/pull/9
 Local branch: `mweb-psbt-typed-maps` (fork `IndigoNakamoto/rust-litecoin`)  
 BDK consumes via path patch until crates.io has **0.32.8-rc.2**.
 
-**Remaining for distribution:**
-- `cargo login` / `CARGO_REGISTRY_TOKEN` as crates.io owner of `litecoin`
-- `cargo publish -p litecoin`
-- Remove `[patch.crates-io]` from workspace + `bdk_wallet/Cargo.toml`
+**Remaining for distribution (crates.io owner):**
+
+```bash
+# From repo root after cargo login:
+./scripts/publish_litecoin_rc2.sh
+# or: cd ../rust-litecoin && cargo publish -p litecoin
+```
+
+Then remove `[patch.crates-io]` from workspace + `bdk_wallet/Cargo.toml`.
+
+`cargo publish --dry-run` for **0.32.8-rc.2** already verifies. Apply-patch artifact:
+[`patches/litecoin-0.32.8-rc.2-mweb-psbt.patch`](patches/litecoin-0.32.8-rc.2-mweb-psbt.patch)
+(PR body: [`RUST_LITECOIN_PR_BODY.md`](RUST_LITECOIN_PR_BODY.md)).
 
 Staging types were removed from `bdk_mweb::psbt`; wallet helpers thin-wrap
 [`bitcoin::psbt::mweb`](https://github.com/rust-litecoin/rust-litecoin) (`MwebInput`,

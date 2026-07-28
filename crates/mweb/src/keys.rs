@@ -282,6 +282,15 @@ mod tests {
             keys.spend.secret_bytes().to_lower_hex_string(),
             "2fe1982b98c0b68c0839421c8a0a0a67ef3198c746ab8e6d09101eb7396a44d8"
         );
+        // ltcwallet mweb_compat expectedScanPubKey / expectedSpendPubKey
+        assert_eq!(
+            keys.scan_public(&secp).serialize().to_lower_hex_string(),
+            "02cd7e29e31bf0c07281d3c591fe3dbe4375b911cc6038ec5d1be82099d6c482f5"
+        );
+        assert_eq!(
+            keys.spend_public(&secp).serialize().to_lower_hex_string(),
+            "03e3908af70085b458020e64aaa5c9a4b8ff382d42af0875c8145db6a30db9cad2"
+        );
 
         let vectors = [
             (

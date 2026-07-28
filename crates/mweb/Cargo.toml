@@ -26,7 +26,7 @@ rusqlite = { version = "0.31.0", features = ["bundled"], optional = true }
 serde_json = { version = "1", optional = true, default-features = false, features = ["std"] }
 
 [dev-dependencies]
-bitcoin = { package = "litecoin", version = "0.32.8-rc.2", default-features = false, features = ["std", "rand-std"] }
+bitcoin = { package = "litecoin", version = "0.32.8-rc.2", default-features = false, features = ["std", "rand-std", "base64"] }
 hex-conservative = { version = "0.2", features = ["alloc"] }
 serde_json = "1"
 bdk_testenv = { path = "../testenv", features = ["litecoin-daemon"] }

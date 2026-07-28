@@ -19,6 +19,10 @@ MWEB primitives for the Litecoin BDK fork:
   (differential leafset + fine/tip-only dating, `PeerPool` ban/rotate)
 - `psbt` module: thin helpers over `bitcoin::psbt::mweb` (`MwebInput` / `MwebOutput` /
   `MwebKernel`) until apps call the crate types directly
+- `psbt_from_ltcd_v2`: ingest Go/ltcd PSBTv2 MWEB packets into rust-litecoin maps
+- Golden fixtures: [`tests/fixtures/`](tests/fixtures/) (regenerate via
+  [`scripts/ltcd_mweb_fixtures`](../../scripts/ltcd_mweb_fixtures)); HD is Core
+  `m/0'/100'/{0,1}'` only — **no** ltcwallet legacy `m/1000'/2'/…`
 
 Wallet integration (feature `mweb` on `bdk_wallet`): `CombinedBalance`, `MwebStore`,
 `prepare_mweb_pegin`, `fund_mweb_send`, `fund_mweb_pegout` (+ deprecated `build_mweb_*`).
@@ -45,5 +49,6 @@ Or SQLite (`ChangeSet::init_sqlite_tables` / `persist_to_sqlite` / `from_sqlite`
 ```bash
 export LITECOIND_EXE=/path/to/litecoind
 cargo test -p bdk_mweb --all-features
+cargo test -p bdk_mweb --test ltcd_psbt_fixtures
 cargo test -p bdk_wallet --test mweb_facade
 ```

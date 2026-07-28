@@ -380,15 +380,25 @@ fn mweb_stealth_keys(addr: &Address) -> Result<(PublicKey, PublicKey), Error> {
     }
 }
 
-/// Core `Output::Create`.
+/// Core `Output::Create` with a fresh random sender key.
 pub fn create_output(
     recipient: &Address,
     value: u64,
     secp: &Secp256k1<All>,
 ) -> Result<([u8; 32], [u8; 32], Output), Error> {
-    let (a, b) = mweb_stealth_keys(recipient)?;
     let sender_privkey = random_secret(secp);
-    let sender_sk = SecretKey::from_slice(&sender_privkey)?;
+    create_output_with_sender(recipient, value, &sender_privkey, secp)
+}
+
+/// Core `Output::Create` with an explicit sender secret (deterministic fixtures / ltcd parity).
+pub fn create_output_with_sender(
+    recipient: &Address,
+    value: u64,
+    sender_privkey: &[u8; 32],
+    secp: &Secp256k1<All>,
+) -> Result<([u8; 32], [u8; 32], Output), Error> {
+    let (a, b) = mweb_stealth_keys(recipient)?;
+    let sender_sk = SecretKey::from_slice(sender_privkey.as_ref())?;
 
     let n_full = hashed_secret(HashTag::Nonce, &sender_sk);
     let mut n = [0u8; 16];
@@ -439,11 +449,11 @@ pub fn create_output(
     hasher.update(&msg_hash);
     hasher.update(&proof_hash);
     let sig_message = *hasher.finalize().as_bytes();
-    let signature = schnorr_sign(&sender_privkey, &sig_message)?;
+    let signature = schnorr_sign(sender_privkey, &sig_message)?;
 
     Ok((
         raw_blind,
-        sender_privkey,
+        *sender_privkey,
         Output {
             commitment,
             sender_public_key: ks,
