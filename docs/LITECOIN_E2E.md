@@ -225,6 +225,21 @@ If Esplora rejects an MWEB-only broadcast, set `LITECOIN_RPC_URL` (+ `LITECOIN_R
 
 CLI happy path uses `MwebPsbt` extract only (`attach_mweb_tx` deprecated).
 
+### Mainnet E2E loop (2026-07-27 evening — interactive Nexus re-run)
+
+Operator on Foundation Nexus phone; agent drove `mainnet_mweb` against local archive litecoind (`LITECOIN_P2P` / `LITECOIN_RPC_URL` cookie).
+
+| Step | Result |
+| --- | --- |
+| Baseline | Transparent `0.00299650`; MWEB spendable `0.00006300`; tip `3149915`. Peg-in required (spendable below send+fee). |
+| Peg-in `0.001` | Tx [`3720023e…`](https://litecoinspace.org/tx/3720023e2017b152794a5e58fa66e8fc615c04787db452d0b29dd467504b3632) via **RPC**; wtxid `eb10e347…`; kernel `18b1a922…`. Staged at tip `3149918`; mature by `3149924` (spendable `0.00056300`). Fixed rust-litecoin `extract_tx_with_mweb` empty-`mweb_inputs` fallback (peg-in hybrid). |
+| Send → Nexus `0.0004` (fee `3900`) | Dest `ltcmweb1qqv6mpy9…`. **wtxid** `fd2aed89f6fdffdcd6a8e47c83a8818cf30e54186f9576f9a9164e630ebaf50a`. Nexus confirmed receive ~20:59 PDT. Default `--fee 50000` too large for balance — use `3900`. |
+| Receive ← Nexus `0.005` | BDK addr idx `8` `ltcmweb1qqf4nzrc…`. Confirmed height `3149956` leaf `347408`. Mempool `getrawtransaction` hex strips `mw_tx` (scan-tx useless); tip-only LIP sync ingested (`MWEB_FINE_SYNC=tip`). |
+| Peg-out `0.001` (fee `3900`) | `0.00002` rejected **dust**; `0.001` to `ltc1qa3n8rtlzp97f0f5anrzm2w8z94w5wng9jrrtu2`. **wtxid** `e8a3f7357e8f33fc80e865fe2163f1666a80708b316709770bc09dbee7b868e5`. HogEx +`0.001` at tip `3149958`; MWEB change `0.00396100` leaf `347412`. |
+| Final | Transparent `0.00298650`; MWEB spendable `0.00408500`; tip `3149958`. |
+
+**Ops notes:** Fine-window sync (4000 Esplora hashes) is too slow for interactive runs — prefer `MWEB_FINE_SYNC=tip`. Marking coins spent before confirm + evaporated mempool view required wiping `mweb.db` / `mweb_sync.json` and full tip resync to recover; next tip sync then saw `spent=1` and change.
+
 ## Notes
 
 - Litecoin testnet here is Litecoin Core's testnet4 directory layout, unrelated to Bitcoin BIP-94.
