@@ -35,7 +35,8 @@ litecoin = { path = "../rust-litecoin/litecoin" }
 
 Published `litecoin` 0.32.8-rc.1 PSBT rejected MWEB bodies (BIP174 has no slots). ltcd defines
 first-class `0x90+` keys in `ltcutil/psbt/types.go`. BDK must not invent a parallel proprietary
-map.
+map. Full reviewer narrative (invariants, false paths, live proof):
+[`REVIEWERS_GUIDE.md`](REVIEWERS_GUIDE.md).
 
 ## Inventory lock (ltcd master, 2026-07-27)
 

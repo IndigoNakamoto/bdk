@@ -1,5 +1,7 @@
 # PR body for rust-litecoin (MWEB PSBT typed maps)
 
+Narrative / false paths / live proof: [`REVIEWERS_GUIDE.md`](REVIEWERS_GUIDE.md).
+
 **Opened:** https://github.com/rust-litecoin/rust-litecoin/pull/9  
 Target: `rust-litecoin/rust-litecoin` base `0.32`  
 Head: `IndigoNakamoto:mweb-psbt-typed-maps`  

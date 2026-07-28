@@ -73,6 +73,9 @@ Ported extras:
   `cargo test -p bdk_bitcoind_rpc --test test_emitter_litecoin` (needs `LITECOIND_EXE`).
   Upstream Bitcoin `TestEnv` tests are parked as `*.upstream`.
 
+For upstream PRs to rust-litecoin or BDK, see
+[`docs/REVIEWERS_GUIDE.md`](docs/REVIEWERS_GUIDE.md) (why / false paths / live proof).
+
 ## Merging upstream
 
 `master` tracks `upstream/master` unmodified. To take a new upstream release:
