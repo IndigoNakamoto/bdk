@@ -3,6 +3,8 @@
 //! Typed `0x90+` maps live in the `litecoin` crate. This module keeps BDK-only fund/sign/scrub
 //! adapters and conversion helpers between wire MimbleWimble types and PSBT maps.
 
+use alloc::vec::Vec;
+
 use bitcoin::blockdata::mimblewimble::{
     self as mw, Input, Kernel, Output, Transaction as MwebTransaction,
 };
@@ -313,7 +315,8 @@ pub fn is_mweb_complete(psbt: &Psbt) -> bool {
 
 /// Thin compatibility wrapper around native [`Psbt`] MWEB fields (migration aid).
 ///
-/// New code should use [`Psbt`] directly with [`scrub_sensitive_fields`] / [`extract_tx_with_mweb`].
+/// New code should use [`Psbt`] directly with [`scrub_sensitive_fields`] /
+/// [`extract_tx_with_mweb`].
 #[derive(Debug, Clone)]
 #[deprecated(note = "use bitcoin::psbt::Psbt mweb_* fields directly")]
 pub struct MwebPsbt {

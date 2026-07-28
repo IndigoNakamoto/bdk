@@ -6,6 +6,11 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![warn(missing_docs)]
+// Sync/P2P helpers intentionally log with eprintln until a shared log facade is wired;
+// several LIP-0006 entry points exceed the default argument threshold by design.
+#![allow(clippy::print_stderr)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
 
 #[macro_use]
 extern crate alloc;
@@ -46,7 +51,7 @@ pub use changeset::ChangeSet;
 pub use coin_db::{MwebBalance, MwebCoin, MwebCoinDatabase, MWEB_PEGIN_MATURITY};
 #[cfg(feature = "encrypt")]
 pub use encrypt::{open, seal};
-#[cfg(all(feature = "encrypt-changeset"))]
+#[cfg(feature = "encrypt-changeset")]
 pub use encrypt::{open_changeset, seal_changeset};
 pub use error::Error;
 pub use keys::{address_index_tweak, master_keys_from_seed, MasterKeyScheme, MasterKeys};

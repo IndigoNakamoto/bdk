@@ -1,6 +1,6 @@
 //! Append-friendly MWEB coin changeset for parallel persistence.
 //!
-//! Enabled with feature `persist`. Compatible with [`bdk_file_store::Store`].
+//! Enabled with feature `persist`. Compatible with `bdk_file_store::Store`.
 
 use alloc::collections::BTreeMap;
 

@@ -6,6 +6,8 @@
 //! This avoids forking `bitcoincore-rpc` / `electrsd`. Esplora is not started here: there is no
 //! packaged regtest Esplora for Litecoin, so Esplora coverage stays on live testnet.
 
+#![allow(clippy::print_stderr)]
+
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -462,7 +464,8 @@ fn electrum_call(electrum_host: &str, method: &str, params: Value) -> Result<Val
         .ok_or_else(|| anyhow!("electrum {method} missing result"))
 }
 
-/// Default regtest height of the first block that may contain MWEB (CSV / Core `FIRST_MWEB_HEIGHT`).
+/// Default regtest height of the first block that may contain MWEB (CSV / Core
+/// `FIRST_MWEB_HEIGHT`).
 pub const FIRST_MWEB_HEIGHT: u32 = 432;
 
 /// Peg-in maturity used by Litecoin Core before MWEB spends are considered safe.
@@ -500,7 +503,7 @@ impl LitecoinNodeEnv {
         })
     }
 
-    /// `127.0.0.1:{p2p_port}` for [`bdk_mweb::lip0006_tcp::TcpMwebPeer`].
+    /// `127.0.0.1:{p2p_port}` for `bdk_mweb::lip0006_tcp::TcpMwebPeer`.
     pub fn p2p_addr(&self) -> std::net::SocketAddr {
         std::net::SocketAddr::from(([127, 0, 0, 1], self.p2p_port))
     }
@@ -770,18 +773,15 @@ impl LitecoinTestEnv {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             let node_height = self.rpc.get_block_count()?;
-            match electrum_call(
+            if let Ok(v) = electrum_call(
                 &self.electrum_host,
                 "blockchain.headers.subscribe",
                 json!([]),
             ) {
-                Ok(v) => {
-                    let tip = v["height"].as_u64().unwrap_or(u64::MAX) as u32;
-                    if tip == node_height {
-                        return Ok(());
-                    }
+                let tip = v["height"].as_u64().unwrap_or(u64::MAX) as u32;
+                if tip == node_height {
+                    return Ok(());
                 }
-                Err(_) => {}
             }
             thread::sleep(Duration::from_millis(200));
         }

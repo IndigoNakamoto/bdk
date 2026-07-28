@@ -272,8 +272,8 @@ pub fn sign_funded_mweb(
         blind_sum(&stealth_pos, &stealth_neg)?
     };
 
-    inputs.sort_by(|a, b| a.output_id.cmp(&b.output_id));
-    outputs.sort_by(|a, b| output_id(a).cmp(&output_id(b)));
+    inputs.sort_by_key(|a| a.output_id);
+    outputs.sort_by_key(output_id);
 
     let mw = MwebTransaction {
         kernel_offset,
@@ -495,7 +495,7 @@ pub fn sign_funded_mweb_pegin(
     let kid = crate::tx_builder::kernel_id(&kernel);
 
     let mut outputs = vec![staged.output.clone()];
-    outputs.sort_by(|a, b| output_id(a).cmp(&output_id(b)));
+    outputs.sort_by_key(output_id);
 
     let mw = MwebTransaction {
         kernel_offset,

@@ -39,7 +39,7 @@ fn tcp_p2p_header_and_pmmr_syncs_owned_balance() {
         .expect("Core sendtoaddress mweb");
     env.mine_mweb_activation(&mining).expect("activate");
 
-    let tip_height = env.rpc.get_block_count().unwrap() as u32;
+    let tip_height = env.rpc.get_block_count().unwrap();
     let tip_hash = env.rpc.get_block_hash(tip_height).unwrap();
 
     let mut peer = TcpMwebPeer::connect(env.p2p_addr(), Network::Regtest).expect("p2p connect");

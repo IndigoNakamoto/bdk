@@ -24,7 +24,7 @@ use crate::scan::{scan_utxo_entries_at, AddressBook};
 
 /// Default batch size for `getmwebutxos` (peer returns up to this many unspent UTXOs).
 ///
-/// [`MwebSyncer`] still halves and retries on rare PMMR verify failures.
+/// [`crate::mweb_sync::MwebSyncer`] still halves and retries on rare PMMR verify failures.
 pub const DEFAULT_UTXO_BATCH: u16 = 500;
 
 /// How strictly to verify LIP-0006 payloads.

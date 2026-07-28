@@ -15,7 +15,10 @@
 
 #![crate_name = "bitcoincore_rpc_json"]
 #![crate_type = "rlib"]
-#![allow(deprecated)] // Because of `GetPeerInfoResultNetwork::Unroutable`.
+#![allow(deprecated)]
+// Because of `GetPeerInfoResultNetwork::Unroutable`.
+// Vendored fork: keep upstream style; do not block workspace clippy on third-party noise.
+#![allow(clippy::all)]
 
 pub extern crate bitcoin;
 #[allow(unused)]
@@ -556,7 +559,7 @@ pub struct GetRawTransactionResultVin {
 
 impl GetRawTransactionResultVin {
     /// Whether this input is from a coinbase tx.
-    /// The [txid], [vout] and [script_sig] fields are not provided
+    /// The `txid`, `vout` and `script_sig` fields are not provided
     /// for coinbase transactions.
     pub fn is_coinbase(&self) -> bool {
         self.coinbase.is_some()
@@ -626,7 +629,7 @@ pub struct GetBlockFilterResult {
 impl GetBlockFilterResult {
     /// Get the filter.
     /// Note that this copies the underlying filter data. To prevent this,
-    /// use [into_filter] instead.
+    /// use [`Self::into_filter`] instead.
     pub fn to_filter(&self) -> bip158::BlockFilter {
         bip158::BlockFilter::new(&self.filter)
     }

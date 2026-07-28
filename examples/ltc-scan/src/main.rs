@@ -5,6 +5,8 @@
 //! Electrum-LTC server, and the resulting transactions are canonicalised by `bdk_chain`. It is
 //! watch-only; spending needs `bdk_wallet`.
 
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use std::collections::BTreeMap;
 use std::fmt;
 

@@ -106,7 +106,7 @@ pub fn bulletproof_verify(
 ) -> Result<bool, Error> {
     #[cfg(feature = "zkp")]
     {
-        Ok(mw::bulletproof_verify(commitment, proof, extra_data)?)
+        mw::bulletproof_verify(commitment, proof, extra_data)
     }
     #[cfg(not(feature = "zkp"))]
     {
@@ -136,7 +136,7 @@ pub fn schnorr_verify(
 ) -> Result<bool, Error> {
     #[cfg(feature = "zkp")]
     {
-        Ok(mw::schnorr_verify(signature, &pubkey.serialize(), msg32)?)
+        mw::schnorr_verify(signature, &pubkey.serialize(), msg32)
     }
     #[cfg(not(feature = "zkp"))]
     {
@@ -147,7 +147,15 @@ pub fn schnorr_verify(
 
 /// Random 32-byte secret key bytes (valid curve scalar).
 pub fn random_secret(_secp: &Secp256k1<All>) -> [u8; 32] {
-    SecretKey::new(&mut rand::thread_rng()).secret_bytes()
+    use rand::RngCore;
+    // Avoid `SecretKey::new` so this works without `bitcoin/rand-std` (no-default-features CI).
+    loop {
+        let mut bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        if let Ok(sk) = SecretKey::from_slice(&bytes) {
+            return sk.secret_bytes();
+        }
+    }
 }
 
 /// Sum positive blinds minus negative blinds (allows a zero running total).

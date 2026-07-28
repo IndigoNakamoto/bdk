@@ -2,7 +2,7 @@
 //!
 //! Performs a minimal `version` / `verack` handshake, then exchanges
 //! `getdata`(MSG_MWEB_HEADER / MSG_MWEB_LEAFSET) and `getmwebutxos` as raw
-//! unknown payloads. Intended for regtest; prefer [`VerifyMode::HeaderAndPmmr`].
+//! unknown payloads. Intended for regtest; prefer [`crate::lip0006::VerifyMode::HeaderAndPmmr`].
 
 use alloc::vec::Vec;
 use std::io::{Read, Write};

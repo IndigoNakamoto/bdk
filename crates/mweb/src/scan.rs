@@ -310,9 +310,7 @@ mod tests {
     fn multi_index_sender(vec_idx: usize) -> [u8; 32] {
         let mut sender = [0u8; 32];
         sender[0] = (vec_idx + 1) as u8;
-        for j in 1..32 {
-            sender[j] = (0xaa + vec_idx) as u8;
-        }
+        sender[1..].fill((0xaa + vec_idx) as u8);
         sender
     }
 

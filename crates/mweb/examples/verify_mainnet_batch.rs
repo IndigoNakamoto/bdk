@@ -1,5 +1,7 @@
 //! Live check: fetch a mainnet UTXO batch and verify PMMR roots.
-//! Usage: LITECOIN_P2P=127.0.0.1:9333 cargo run -p bdk_mweb --example verify_mainnet_batch --features lip0006
+//! Usage: LITECOIN_P2P=127.0.0.1:9333 cargo run -p bdk_mweb --example verify_mainnet_batch
+//! --features lip0006
+#![allow(clippy::print_stdout)]
 use bdk_mweb::lip0006::MwebUtxoSource;
 use bdk_mweb::lip0006_tcp::TcpMwebPeer;
 use bdk_mweb::p2p::{GetMwebUtxos, OUTPUT_FORMAT_FULL};

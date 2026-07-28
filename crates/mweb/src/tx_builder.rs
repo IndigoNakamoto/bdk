@@ -46,7 +46,8 @@ pub struct FinishedMwebTx {
     pub change: Option<MwebCoin>,
     /// Output ids of spent inputs.
     pub spent_output_ids: Vec<[u8; 32]>,
-    /// Spent input coins (secrets for PSBT map population / [`crate::MwebPsbt::sign_mweb_components`]).
+    /// Spent input coins (secrets for PSBT map population /
+    /// [`crate::MwebPsbt::sign_mweb_components`]).
     pub spent_coins: Vec<MwebCoin>,
 }
 
@@ -340,8 +341,8 @@ fn assemble_body(
         blind_sum(&stealth_pos, &stealth_neg)?
     };
 
-    inputs.sort_by(|a, b| a.output_id.cmp(&b.output_id));
-    outputs.sort_by(|a, b| output_id(a).cmp(&output_id(b)));
+    inputs.sort_by_key(|a| a.output_id);
+    outputs.sort_by_key(output_id);
 
     Ok(AssembledBody {
         mw_tx: mweb::Transaction {

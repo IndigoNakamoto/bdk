@@ -15,18 +15,13 @@ use bitcoin::{Network, NetworkKind};
 use crate::error::Error;
 
 /// Which BIP32 layout to use for master scan/spend keys.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MasterKeyScheme {
     /// Litecoin Core 0.21: `m/0'/100'/{0,1}'`.
+    #[default]
     LitecoinCore,
     /// LIP-0004 text: `m/1/0/100'` and `m/1/0/101'` (non-hardened middle components).
     Lip0004,
-}
-
-impl Default for MasterKeyScheme {
-    fn default() -> Self {
-        Self::LitecoinCore
-    }
 }
 
 impl MasterKeyScheme {

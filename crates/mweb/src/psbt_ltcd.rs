@@ -5,6 +5,8 @@
 //! global keys. This module bridges Go-produced bytes so BDK can extract / validate
 //! without requiring a Go toolchain at test time.
 
+use alloc::vec::Vec;
+
 use bitcoin::blockdata::transaction;
 use bitcoin::psbt::mweb::{MwebInput, MwebKernel, MwebOutput};
 use bitcoin::psbt::Psbt;
@@ -55,13 +57,13 @@ pub fn psbt_from_ltcd_v2(bytes: &[u8]) -> Result<Psbt, Error> {
                 tx_version = u32::from_le_bytes(value.try_into().unwrap());
             }
             GLOBAL_INPUT_COUNT if key_data.is_empty() => {
-                input_count = read_varint(&value)? as usize;
+                input_count = read_varint(value)? as usize;
             }
             GLOBAL_OUTPUT_COUNT if key_data.is_empty() => {
-                output_count = read_varint(&value)? as usize;
+                output_count = read_varint(value)? as usize;
             }
             GLOBAL_MWEB_KERNEL_COUNT if key_data.is_empty() => {
-                kernel_count = read_varint(&value)? as usize;
+                kernel_count = read_varint(value)? as usize;
             }
             GLOBAL_MWEB_TX_OFFSET if key_data.is_empty() && value.len() == 32 => {
                 let mut off = [0u8; 32];

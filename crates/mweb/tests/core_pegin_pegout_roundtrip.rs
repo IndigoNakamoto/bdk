@@ -35,6 +35,7 @@ fn bdk_pegin_then_pegout_roundtrip() {
     // --- Peg-in (BDK body) ---
     let pegin_amount = Amount::from_btc(1.0).unwrap();
     let mweb_fee = Amount::from_sat(50_000);
+    #[allow(deprecated)]
     let pegin = build_pegin(
         &keys,
         2,

@@ -17,10 +17,10 @@ use bitcoin::{Script, ScriptBuf};
 
 /// Returns `true` if `script` is a Litecoin MWEB bridge output (witness v8 HogAddr or v9 peg-in).
 pub fn is_mweb_bridge_output(script: &Script) -> bool {
-    match script.witness_version() {
-        Some(WitnessVersion::V8) | Some(WitnessVersion::V9) => true,
-        _ => false,
-    }
+    matches!(
+        script.witness_version(),
+        Some(WitnessVersion::V8) | Some(WitnessVersion::V9)
+    )
 }
 
 /// Builds the transparent peg-in `scriptPubKey`: witness version 9 committing to `kernel_id`.

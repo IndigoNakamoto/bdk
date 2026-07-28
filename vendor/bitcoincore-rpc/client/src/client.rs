@@ -701,7 +701,7 @@ pub trait RpcApi: Sized {
         self.call("listunspent", handle_defaults(&mut args, &defaults))
     }
 
-    /// To unlock, use [unlock_unspent].
+    /// To unlock, use [`Self::unlock_unspent`].
     fn lock_unspent(&self, outputs: &[OutPoint]) -> Result<bool> {
         let outputs: Vec<_> = outputs
             .into_iter()

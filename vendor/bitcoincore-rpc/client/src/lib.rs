@@ -15,6 +15,10 @@
 
 #![crate_name = "bitcoincore_rpc"]
 #![crate_type = "rlib"]
+// Vendored fork: keep upstream style; do not block workspace clippy on third-party noise.
+#![allow(clippy::all)]
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
 
 #[macro_use]
 extern crate log;

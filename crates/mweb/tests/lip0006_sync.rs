@@ -84,7 +84,7 @@ fn scripted_lip0006_sync_rewinds_core_output() {
     let mw = tx.mw_tx.as_ref().expect("mw_tx");
     env.mine_mweb_activation(&mining).expect("activate");
 
-    let tip = env.rpc.get_block_count().unwrap() as u32;
+    let tip = env.rpc.get_block_count().unwrap();
     let tip_hash = env.rpc.get_block_hash(tip).unwrap();
 
     let outputs: Vec<_> = mw

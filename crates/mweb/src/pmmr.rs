@@ -226,7 +226,7 @@ pub fn verify_leafset(
     leafset_root: &[u8; 32],
     output_mmr_size: u64,
 ) -> Result<(), Error> {
-    let need = ((output_mmr_size + 7) / 8) as usize;
+    let need = output_mmr_size.div_ceil(8) as usize;
     if leafset.leafset.len() < need {
         return Err(Error::Crypto("leafset shorter than output_mmr_size".into()));
     }
@@ -397,7 +397,7 @@ pub fn verify_utxo_batch(
     if num_leaves == 0 {
         return Err(Error::Crypto("empty output MMR".into()));
     }
-    let need = ((num_leaves + 7) / 8) as usize;
+    let need = num_leaves.div_ceil(8) as usize;
     if leafset.leafset.len() < need {
         return Err(Error::Crypto("leafset too short for PMMR verify".into()));
     }

@@ -12,7 +12,8 @@ members = [
     "examples/ltc-scan",
 ]
 # `bdk_wallet` is a nested clone of the separate IndigoNakamoto/bdk_wallet fork.
-exclude = ["bdk_wallet"]
+# `vendor/bitcoincore-rpc` is its own Cargo workspace (path dep of bdk_bitcoind_rpc).
+exclude = ["bdk_wallet", "vendor/bitcoincore-rpc"]
 
 [workspace.package]
 authors = ["Bitcoin Dev Kit Developers"]

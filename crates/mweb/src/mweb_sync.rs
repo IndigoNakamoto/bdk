@@ -55,7 +55,7 @@ pub struct LeafsetDiff {
     pub removed: Vec<u64>,
 }
 
-/// Diff `old` vs `new` leafset blobs (MSB-first bits, same layout as [`MwebLeafset`]).
+/// Diff `old` vs `new` leafset blobs (MSB-first bits, same layout as [`crate::p2p::MwebLeafset`]).
 pub fn diff_leafsets(old: &[u8], new: &[u8]) -> LeafsetDiff {
     let max_len = old.len().max(new.len());
     let mut added = Vec::new();
@@ -514,7 +514,7 @@ impl PeerPool {
             if self.is_banned(addr) {
                 continue;
             }
-            match crate::lip0006_tcp::TcpMwebPeer::connect(&addr, network) {
+            match crate::lip0006_tcp::TcpMwebPeer::connect(addr, network) {
                 Ok(p) => {
                     self.last_connected = Some(addr);
                     return Ok(p);
@@ -694,7 +694,8 @@ impl MwebSyncer {
             if tip_shorter {
                 db.disconnect_from(tip_height.saturating_add(1));
             } else if tip_changed {
-                // Same or higher height but different hash — clear from common ancestor heuristically.
+                // Same or higher height but different hash — clear from common ancestor
+                // heuristically.
                 let rewind = tip_height.saturating_sub(10).saturating_add(1);
                 db.disconnect_from(rewind);
             }
@@ -910,10 +911,8 @@ impl MwebSyncer {
                     Some(i) => !leafset_has_leaf(&leafset.leafset, i),
                     None => !all_fetched_ids.contains(&id) && resume_cursor.is_none(),
                 };
-                if gone && db.mark_spent(&id) {
-                    if !result.spent.contains(&id) {
-                        result.spent.push(id);
-                    }
+                if gone && db.mark_spent(&id) && !result.spent.contains(&id) {
+                    result.spent.push(id);
                 }
             }
         }

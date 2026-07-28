@@ -30,6 +30,7 @@ use miniscript::Descriptor;
 ///
 /// Requires `LITECOIND_EXE` and `ELECTRS_LTC_EXE`; skips when unset.
 #[test]
+#[allow(clippy::print_stderr)]
 fn relevant_conflicts() -> bdk_testenv::anyhow::Result<()> {
     use bdk_chain::spk_txout::SpkTxOutIndex;
     use bdk_testenv::{anyhow, LitecoinTestEnv};
