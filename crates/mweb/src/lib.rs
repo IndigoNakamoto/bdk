@@ -51,22 +51,27 @@ pub use error::Error;
 pub use keys::{address_index_tweak, master_keys_from_seed, MasterKeyScheme, MasterKeys};
 pub use psbt::{
     enrich_input_from_coin, extract_tx_with_mweb, is_mweb_complete, mweb_input_from_wire,
-    mweb_kernel_from_wire, mweb_output_from_wire, populate_pegin_psbt, populate_psbt_from_mw,
-    psbt_from_finished_mweb_tx, scrub_sensitive_fields, sign_mweb_components, MwebPsbtInput,
-    MwebPsbtKernel, MwebPsbtOutput, MWEB_KERNEL_COUNT_TYPE, MWEB_TX_OFFSET_TYPE,
+    mweb_kernel_from_wire, mweb_output_from_wire, populate_mweb_key_origins, populate_pegin_psbt,
+    populate_psbt_from_mw, psbt_from_finished_mweb_tx, scrub_sensitive_fields,
+    sign_mweb_components, validate_mweb_key_origins, validate_mweb_key_origins_against,
+    MwebPsbtInput, MwebPsbtKernel, MwebPsbtOutput, MWEB_KERNEL_COUNT_TYPE,
+    MWEB_MASTER_SCAN_KEY_ORIGIN_TYPE, MWEB_MASTER_SPEND_KEY_ORIGIN_TYPE, MWEB_TX_OFFSET_TYPE,
     MWEB_TX_STEALTH_OFFSET_TYPE,
 };
 #[allow(deprecated)]
 pub use psbt::MwebPsbt;
 pub use psbt_fund::{
-    change_from_funded, fund_mweb_spend, sign_funded_mweb, FundedMwebPsbt, StagedMwebOutput,
+    change_from_funded, fund_mweb_pegin, fund_mweb_spend, sign_funded_mweb, sign_funded_mweb_pegin,
+    FundedMwebPegin, FundedMwebPsbt, StagedMwebOutput,
 };
 pub use scan::{
     output_id, rewind_output, scan_litecoin_tx, scan_litecoin_tx_at, scan_mweb_tx, scan_mweb_tx_at,
     scan_outputs, scan_outputs_at, scan_utxo_entries_at, AddressBook, DEFAULT_GAP_LIMIT,
 };
 pub use tx_builder::{
-    build_pegin, kernel_id, FinishedMwebPegin, FinishedMwebTx, MwebTxBuilder, CHANGE_ADDRESS_INDEX,
+    kernel_id, FinishedMwebPegin, FinishedMwebTx, MwebTxBuilder, CHANGE_ADDRESS_INDEX,
 };
+#[allow(deprecated)]
+pub use tx_builder::build_pegin;
 
 pub use bitcoin as litecoin;

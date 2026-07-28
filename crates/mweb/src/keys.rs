@@ -7,7 +7,7 @@
 //! Subaddress tweak matches production `mw::Keychain::GetSpendKey`:
 //! `mi = BLAKE3('A' || LE32(index) || scan_secret)`.
 
-use bitcoin::bip32::{ChildNumber, DerivationPath, Xpriv};
+use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpriv};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::{All, PublicKey, Scalar, SecretKey};
 use bitcoin::{Network, NetworkKind};
@@ -29,6 +29,40 @@ impl Default for MasterKeyScheme {
     }
 }
 
+impl MasterKeyScheme {
+    /// Scan-key derivation path for this scheme.
+    pub fn scan_path(self) -> Result<DerivationPath, Error> {
+        Ok(match self {
+            Self::LitecoinCore => DerivationPath::from(vec![
+                ChildNumber::from_hardened_idx(0)?,
+                ChildNumber::from_hardened_idx(100)?,
+                ChildNumber::from_hardened_idx(0)?,
+            ]),
+            Self::Lip0004 => DerivationPath::from(vec![
+                ChildNumber::from_normal_idx(1)?,
+                ChildNumber::from_normal_idx(0)?,
+                ChildNumber::from_hardened_idx(100)?,
+            ]),
+        })
+    }
+
+    /// Spend-key derivation path for this scheme.
+    pub fn spend_path(self) -> Result<DerivationPath, Error> {
+        Ok(match self {
+            Self::LitecoinCore => DerivationPath::from(vec![
+                ChildNumber::from_hardened_idx(0)?,
+                ChildNumber::from_hardened_idx(100)?,
+                ChildNumber::from_hardened_idx(1)?,
+            ]),
+            Self::Lip0004 => DerivationPath::from(vec![
+                ChildNumber::from_normal_idx(1)?,
+                ChildNumber::from_normal_idx(0)?,
+                ChildNumber::from_hardened_idx(101)?,
+            ]),
+        })
+    }
+}
+
 /// Master scan (`a`) and spend (`b`) secrets for an MWEB account.
 #[derive(Clone)]
 pub struct MasterKeys {
@@ -38,6 +72,12 @@ pub struct MasterKeys {
     pub spend: SecretKey,
     /// Scheme used to derive these keys.
     pub scheme: MasterKeyScheme,
+    /// BIP32 master fingerprint of the seed used to derive these keys.
+    pub master_fingerprint: Fingerprint,
+    /// Full derivation path to the scan key.
+    pub scan_path: DerivationPath,
+    /// Full derivation path to the spend key.
+    pub spend_path: DerivationPath,
 }
 
 impl MasterKeys {
@@ -49,40 +89,29 @@ impl MasterKeys {
         secp: &Secp256k1<All>,
     ) -> Result<Self, Error> {
         let master = Xpriv::new_master(network, seed)?;
-        let (scan_path, spend_path) = match scheme {
-            MasterKeyScheme::LitecoinCore => (
-                DerivationPath::from(vec![
-                    ChildNumber::from_hardened_idx(0)?,
-                    ChildNumber::from_hardened_idx(100)?,
-                    ChildNumber::from_hardened_idx(0)?,
-                ]),
-                DerivationPath::from(vec![
-                    ChildNumber::from_hardened_idx(0)?,
-                    ChildNumber::from_hardened_idx(100)?,
-                    ChildNumber::from_hardened_idx(1)?,
-                ]),
-            ),
-            MasterKeyScheme::Lip0004 => (
-                // m/1/0/100' — LIP text uses a hardened final component.
-                DerivationPath::from(vec![
-                    ChildNumber::from_normal_idx(1)?,
-                    ChildNumber::from_normal_idx(0)?,
-                    ChildNumber::from_hardened_idx(100)?,
-                ]),
-                DerivationPath::from(vec![
-                    ChildNumber::from_normal_idx(1)?,
-                    ChildNumber::from_normal_idx(0)?,
-                    ChildNumber::from_hardened_idx(101)?,
-                ]),
-            ),
-        };
+        let fingerprint = master.fingerprint(secp);
+        let scan_path = scheme.scan_path()?;
+        let spend_path = scheme.spend_path()?;
         let scan = master.derive_priv(secp, &scan_path)?.private_key;
         let spend = master.derive_priv(secp, &spend_path)?.private_key;
         Ok(Self {
             scan,
             spend,
             scheme,
+            master_fingerprint: fingerprint,
+            scan_path,
+            spend_path,
         })
+    }
+
+    /// BIP32 [`KeySource`] for the master scan key (`0x9A`).
+    pub fn scan_key_source(&self) -> KeySource {
+        (self.master_fingerprint, self.scan_path.clone())
+    }
+
+    /// BIP32 [`KeySource`] for the master spend key (`0x9B`).
+    pub fn spend_key_source(&self) -> KeySource {
+        (self.master_fingerprint, self.spend_path.clone())
     }
 
     /// Master scan public key `A = a·G`.
@@ -226,5 +255,81 @@ mod tests {
             keys.address(2, NetworkKind::Test, &secp).unwrap().to_string(),
             "tmweb1qqwzy5see3nhfrackv6fzqge4462q08zv809te0v3spr3wllxahgmuqmjp4r58m2n9mwtvxrey6l9ejpantlefwgwr557t08ew6ufsg0d0gmucskp"
         );
+        assert_eq!(keys.master_fingerprint, keys.scan_key_source().0);
+        assert_eq!(keys.scan_path.to_string(), "0'/100'/0'");
+        assert_eq!(keys.spend_path.to_string(), "0'/100'/1'");
+    }
+
+    /// Port of ltcd `ltcutil/mweb/keychain_test.go` + ltcwallet `mweb_compat_test.go`.
+    #[test]
+    fn ltcd_keychain_subaddress_matches_core() {
+        use hex_conservative::{DisplayHex, FromHex};
+
+        let secp = Secp256k1::new();
+        let seed = <[u8; 32]>::from_hex(
+            "2a64df085eefedd8bfdbb33176b5ba2e62e8be8b56c8837795598bb6c440c064",
+        )
+        .unwrap();
+        let keys =
+            MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::LitecoinCore, &secp)
+                .unwrap();
+
+        assert_eq!(
+            keys.scan.secret_bytes().to_lower_hex_string(),
+            "b3c91b7291c2e1e06d4a93f3dc32404aef9927db8e794c01a7b4de18a397c338"
+        );
+        assert_eq!(
+            keys.spend.secret_bytes().to_lower_hex_string(),
+            "2fe1982b98c0b68c0839421c8a0a0a67ef3198c746ab8e6d09101eb7396a44d8"
+        );
+
+        let vectors = [
+            (
+                0u32,
+                "03acdfb78943f3330437760e37731828f9abd626a72df16fc7cd968df13b7465ab",
+                "039ed000ed69ca7d593f09ad4a373200bc9711261aab56efc05b92a5eab434f864",
+                "4076801c591afd06d2823c79858e4c93a6a69ad31ddca673e457437229c74b18",
+                "ltcmweb1qqwkdldufg0enxpphwc8rwucc9ru6h43x5uklzm78ektgmufmw3j6kqu76qqw66w204vn7zddfgmnyq9ujugjvx4t2mhuqkuj5h4tgd8cvs6gg076",
+            ),
+            (
+                1,
+                "02516a92f3bc6025bce2911e67140dded34ac1f938df0148c9b478e577b5054e42",
+                "035dad4451e4f2bfd56bb0266a12d92af4749d43a452471e52a437b9d7bbb157c1",
+                "edf509d17a9ebe744dfb77650a4cc39fa90dc6a758c9d33107b2c4a501fa98ab",
+                "ltcmweb1qqfgk4yhnh3szt08zjy0xw9qdmmf54s0e8r0szjxfk3uw2aa4q48yyq6a44z9re8jhl2khvpxdgfdj2h5wjw58fzjgu099fphh8tmhv2hcygfr2nl",
+            ),
+            (
+                10,
+                "03f864dcaa67a74542ff9b5adc27ad2f9002626baa91372e9aee7737ecfec18cca",
+                "027223f04b94617ec15d7d5c135c42242af64b2129f17080e6b10756bb6ec10073",
+                "bb33118206a8f8ec35874f78ae5676365bc4e9480d4600947ebb5e049ca4d3e4",
+                "ltcmweb1qq0uxfh92v7n52shlndddcfad97gqycnt42gnwt56aemn0m87cxxv5qnjy0cyh9rp0mq46l2uzdwyyfp27e9jz203wzqwdvg826akasgqwvgs2kze",
+            ),
+        ];
+
+        for (index, scan_a, spend_b, spend_key, encoded) in vectors {
+            let (a_i, b_i) = keys.stealth_pubkeys(index, &secp).unwrap();
+            assert_eq!(a_i.serialize().to_lower_hex_string(), scan_a);
+            assert_eq!(b_i.serialize().to_lower_hex_string(), spend_b);
+
+            let sk = keys.spend_key_at(index).unwrap();
+            assert_eq!(sk.secret_bytes().to_lower_hex_string(), spend_key);
+            assert_eq!(PublicKey::from_secret_key(&secp, &sk), b_i);
+
+            // Spend + mi(i) == SpendKey(i)
+            let mi = address_index_tweak(&keys.scan, index);
+            let reconstructed = keys
+                .spend
+                .add_tweak(&Scalar::from_be_bytes(mi).unwrap())
+                .unwrap();
+            assert_eq!(reconstructed, sk);
+
+            assert_eq!(
+                keys.address(index, NetworkKind::Main, &secp)
+                    .unwrap()
+                    .to_string(),
+                encoded
+            );
+        }
     }
 }

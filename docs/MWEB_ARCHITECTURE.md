@@ -22,6 +22,7 @@ alternate for peg-in, but BDK can author peg-in/out bodies itself (Phase 5).
 | Path | Role |
 | --- | --- |
 | **`fund_mweb_*` → `sign_funded_mweb` → scrub → `Psbt::extract_tx_with_mweb`** (`mw_tx` at extract; `attach_mweb_tx` / wallet `build_mweb_*` deprecated) | Happy-path CLI / facade (mainnet send + peg-out) |
+| **`fund_mweb_pegin` → `sign_funded_mweb_pegin` → merge maps → extract** (`build_pegin` deprecated) | Happy-path peg-in |
 | **Native `bitcoin::psbt::mweb` (`litecoin` 0.32.8-rc.2)** | Wire-interop shape; BDK thin helpers in `bdk_mweb::psbt` |
 
 Do **not** invent a parallel proprietary key scheme. Do **not** embed Go.
@@ -147,8 +148,8 @@ A_i = a·B_i
   Electrum stays outside the crate. Peg-in maturity = 6 (`MWEB_PEGIN_MATURITY`);
   reorgs call `MwebStore::disconnect_from(height)`. Prefer `MwebSyncer` for receive /
   confirmation dating; `sync_mweb_at_tip` remains as a one-shot helper.
-- **ltcsuite parity:** native PSBTv2 MWEB in `litecoin` 0.32.8-rc.2 consumed; crates.io publish
-  + full in-PSBT peg-in (no `build_pegin` sidecar) remain follow-ups. See
+- **ltcsuite parity:** native PSBTv2 MWEB in `litecoin` 0.32.8-rc.2 consumed (KeySource
+  `0x9A`/`0x9B` + in-PSBT peg-in). crates.io publish still open (path patch retained). See
   [`LTCSUITE_ALIGNMENT.md`](LTCSUITE_ALIGNMENT.md) and [`MWEB_PEER_OPS.md`](MWEB_PEER_OPS.md).
 
 ## False paths

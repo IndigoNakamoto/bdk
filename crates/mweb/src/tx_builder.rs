@@ -158,10 +158,11 @@ impl MwebTxBuilder {
 
 /// Author a peg-in `mw_tx` (no MWEB inputs) sending `pegin_amount - fee` to `receive_index`.
 ///
-/// The caller builds the transparent half with v9 program = [`FinishedMwebPegin::kernel_id`]
-/// and value = [`FinishedMwebPegin::pegin_amount`], then [`attach`]s `mw_tx`.
-///
-/// [`attach`]: bdk_wallet::attach_mweb_tx (when using the wallet crate)
+/// Prefer [`crate::fund_mweb_pegin`] / [`crate::sign_funded_mweb_pegin`] (maps-first).
+#[deprecated(
+    since = "0.1.0",
+    note = "use fund_mweb_pegin + sign_funded_mweb_pegin (maps-first) instead"
+)]
 pub fn build_pegin(
     keys: &MasterKeys,
     receive_index: u32,

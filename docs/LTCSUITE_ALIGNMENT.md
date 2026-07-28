@@ -9,8 +9,9 @@ Rust ports semantics into `litecoin` / `bdk_mweb` / `bdk_wallet` — **no Go FFI
 - All `0x90+` / kernel type codes in [`crates/mweb/src/psbt.rs`](../crates/mweb/src/psbt.rs) match ltcd.
 - Finalize/extract must emit **stealth address** on outputs (`scan||spend`, 66 bytes) — see ltcd
   `extractor.go` / `psbt.go` (`StealthAddress`).
-- BIP32 origins `0x9A` / `0x9B` are typed in BDK maps; population is optional until wallet exposes
-  master fingerprints (ltcwallet `populateMwebKeyOrigins`).
+- BIP32 origins `0x9A` / `0x9B` are `(PublicKey, KeySource)` in rust-litecoin; BDK
+  `populate_mweb_key_origins` / `validate_mweb_key_origins` fill them on fund (ltcwallet
+  `populateMwebKeyOrigins`).
 - Upstream absorption checklist: [`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md).
 
 Canonical sources:
@@ -76,7 +77,7 @@ ltcwallet populates origins via `populateMwebKeyOrigins` / `validateMwebKeyOrigi
 | `MwebKernelStealthCommitType` | `1` |
 | `MwebKernelFeeType` | `2` |
 | `MwebKernelPeginAmountType` | `3` |
-| `MwebKernelPegoutType` | `4` |
+| `MwebKernelPegoutType` | `4` (repeated; pegout index in key data; TxOut wire value) |
 | `MwebKernelLockHeightType` | `5` |
 | `MwebKernelFeaturesType` | `6` |
 | `MwebKernelExtraDataType` | `7` |
@@ -88,9 +89,11 @@ ltcwallet populates origins via `populateMwebKeyOrigins` / `validateMwebKeyOrigi
 | --- | --- | --- |
 | Container | Native `bitcoin::psbt::mweb` (`litecoin` **0.32.8-rc.2**); `mw_tx` **extract-only** via `Psbt::extract_tx_with_mweb` | Native PSBTv2 MWEB maps in `litecoin` |
 | Sign path | `fund_mweb_*` → `sign_funded_mweb` → scrub → extract (ltcwallet-shaped) | `SignMwebComponents` inside PSBT |
-| Interop | Mainnet Nexus send proven; map round-trip + fund/sign unit tests | Cross-wallet PSBT round-trip |
+| Interop | Mainnet Nexus send proven; map round-trip + fund/sign + KeySource origin unit tests | Cross-wallet PSBT round-trip |
 
-**Upstream absorb:** staging removed; see [`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md) (crates.io publish of rc.2 still open — workspace `[patch.crates-io]`).
+**Upstream absorb:** staging removed; native maps in rust-litecoin **0.32.8-rc.2** (patch +
+dry-run publish ready — see [`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md)). Workspace
+keeps `[patch.crates-io]` until crates.io lists rc.2.
 
 ---
 
@@ -131,9 +134,12 @@ What already matches: LIP-0006 message order, leafset blake3, PMMR `output_root`
 ## 3. Ordered backlog
 
 1. ~~**PSBTv2 MWEB types**~~ — native in `litecoin` 0.32.8-rc.2; BDK consumes via thin helpers
-   ([`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md); crates.io publish still open).
+   ([`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md); live crates.io upload = maintainer
+   step after PR merge).
 2. ~~**In-PSBT fund/sign/finalize**~~ — `fund_mweb_*` + `sign_funded_mweb` + scrub +
    `Psbt::extract_tx_with_mweb`; wallet `build_mweb_*` deprecated.
+2b. ~~**In-PSBT peg-in + BIP32 origins**~~ — `fund_mweb_pegin` / `sign_funded_mweb_pegin`;
+   `populate_mweb_key_origins`; `build_pegin` deprecated.
 3. ~~**Deprecate `attach_mweb_tx` on happy path**~~ — marked `#[deprecated]`.
 4. ~~**mwebsync-shaped syncer**~~ — tip-loop wait, `PeerPool::with_failover` /
    `run_once_with_pool`, fine window 4000 default.

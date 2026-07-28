@@ -70,6 +70,8 @@ Latest tip: `58171f0a` — *consume litecoin 0.32.8-rc.2 PSBT maps and harden Pe
 
 - Typed PSBTv2 MWEB maps (`0x90+`) matching ltcd `ltcutil/psbt/types.go` (inventory locked 2026-07-27).
 - Happy path: `fund_mweb_*` → `sign_funded_mweb` → scrub → `Psbt::extract_tx_with_mweb` (`mw_tx` at extract).
+- Peg-in: `fund_mweb_pegin` → `sign_funded_mweb_pegin` → merge maps onto transparent PSBT → extract.
+- BIP32 origins `0x9A`/`0x9B` populated via `populate_mweb_key_origins` (survive scrub).
 - Extract emits stealth address `scan||spend` (66 bytes) like ltcd `extractor.go`.
 - Consumes native `bitcoin::psbt::mweb` from rust-litecoin rc.2 (not proprietary `0xFC` blob stuffing).
 
@@ -114,9 +116,7 @@ Related docs: [LTCSUITE_ALIGNMENT.md](LTCSUITE_ALIGNMENT.md), [MWEB_ARCHITECTURE
 
 ## Known gaps (honest)
 
-- `litecoin` **0.32.8-rc.2** not yet on crates.io for consumers — workspace still patches path until publish.
-- Full in-PSBT peg-in still partly sidecar (`build_pegin`); follow-up.
-- BIP32 origins `0x9A`/`0x9B` typed; population optional until fingerprints exposed.
+- `litecoin` **0.32.8-rc.2** not yet on crates.io for consumers — workspace still patches path until publish (local branch ready; push/publish blocked on GitHub write + `CARGO_REGISTRY_TOKEN`).
 - Mempool watch deferred.
 - Multi-peer **omission** defense incomplete (malicious peer can still omit owned UTXOs).
 - No packaged Litecoin regtest Esplora (Electrum-first).

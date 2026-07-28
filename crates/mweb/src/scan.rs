@@ -283,3 +283,191 @@ pub fn scan_litecoin_tx_at(
     };
     scan_mweb_tx_at(keys, book, mw, db, secp, block_height)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::schnorr_sign;
+    use crate::hash::blake3_hash;
+    use crate::keys::{MasterKeyScheme, MasterKeys};
+    use crate::tx_builder::create_output;
+    use bitcoin::bip32::{DerivationPath, Fingerprint};
+    use bitcoin::{Network, NetworkKind};
+    use hex_conservative::FromHex;
+
+    fn ltcd_coin_output() -> mweb::Output {
+        use bitcoin::secp256k1::PublicKey;
+        // ltcd `coin_test.go` uses a stub range-proof (64 bytes), not a full 675-byte bulletproof.
+        let raw = <Vec<u8>>::from_hex(
+            "087c3e31a61d3d46bdb13729d3c4ac39da15fb13f3e1b1e0e1abdbbc52ca03f0\
+             2d031a4777fdfcbb3594ac4f7b57a1ad4343d27601e8542cac591733098d41e4\
+             9c5002e44d6d8cbdb20d58b39a3294ea6e94031ae09e4a489e4f484ceea0df6c\
+             467a76010334bab2ce38ea861e61d92386b4bdbb916ce3b481ce996ad5e62c2f\
+             6801fa8e4e51f84fd893a8c658fcca5b70966568af374bfb0e75f24830ca0000\
+             000000000000000000000000000000000000000000000000000000000000c090\
+             05a93313d9d9ea3805655f5474e3f39db5ae4d0bc29c6ab3f3aded78e46da942\
+             a4ec525fbf41cbb3e9bf878bbe0c26dba6f44250cc55c82a7fd1eb90a51ceda0\
+             89ee46105283bb99cf465eb1bc901c62e289e3e710ec8df7daeaab187b9e",
+        )
+        .unwrap();
+        assert_eq!(raw.len(), 286);
+        let mut off = 0usize;
+        let mut commitment = [0u8; 33];
+        commitment.copy_from_slice(&raw[off..off + 33]);
+        off += 33;
+        let sender_public_key = PublicKey::from_slice(&raw[off..off + 33]).unwrap();
+        off += 33;
+        let receiver_public_key = PublicKey::from_slice(&raw[off..off + 33]).unwrap();
+        off += 33;
+        let features = raw[off];
+        off += 1;
+        assert_eq!(features, 1);
+        let ke = PublicKey::from_slice(&raw[off..off + 33]).unwrap();
+        off += 33;
+        let view_tag = raw[off];
+        off += 1;
+        let masked_value = u64::from_le_bytes(raw[off..off + 8].try_into().unwrap());
+        off += 8;
+        let mut masked_nonce = [0u8; 16];
+        masked_nonce.copy_from_slice(&raw[off..off + 16]);
+        off += 16;
+        let stub_proof = &raw[off..off + 64];
+        off += 64;
+        let mut signature = [0u8; 64];
+        signature.copy_from_slice(&raw[off..off + 64]);
+        // Pad stub into rust-litecoin's fixed 675-byte proof slot.
+        let mut range_proof = [0u8; 675];
+        range_proof[..64].copy_from_slice(stub_proof);
+        mweb::Output {
+            commitment,
+            sender_public_key,
+            receiver_public_key,
+            message: mweb::OutputMessage {
+                features,
+                standard_fields: Some(mweb::OutputMessageStandardFields {
+                    key_exchange_pubkey: ke,
+                    view_tag,
+                    masked_value,
+                    masked_nonce,
+                }),
+                extra_data: Vec::new(),
+            },
+            range_proof,
+            signature,
+        }
+    }
+
+    fn keys_from_secrets(scan_hex: &str, spend_hex: &str) -> MasterKeys {
+        let scan =
+            bitcoin::secp256k1::SecretKey::from_slice(&<[u8; 32]>::from_hex(scan_hex).unwrap())
+                .unwrap();
+        let spend =
+            bitcoin::secp256k1::SecretKey::from_slice(&<[u8; 32]>::from_hex(spend_hex).unwrap())
+                .unwrap();
+        MasterKeys {
+            scan,
+            spend,
+            scheme: MasterKeyScheme::LitecoinCore,
+            master_fingerprint: Fingerprint::from([0u8; 4]),
+            scan_path: DerivationPath::default(),
+            spend_path: DerivationPath::default(),
+        }
+    }
+
+    /// Port of ltcd `TestSignature` (`coin_test.go`).
+    #[test]
+    fn ltcd_output_signature_matches_sender() {
+        let output = ltcd_coin_output();
+        let sender = <[u8; 32]>::from_hex(
+            "46ea6b248ba712462007aad44d06d8cb2f05c2ab737a8fc3e0ff328676fa40e7",
+        )
+        .unwrap();
+
+        // Fixture wire after the message is `[32 zero][32 RangeProofHash][64 sig]` (stub proof,
+        // not a full 675-byte bulletproof). Go signs over `RangeProofHash` directly.
+        let msg_hash = blake3_hash(&serialize(&output.message));
+        let mut proof_hash = [0u8; 32];
+        proof_hash.copy_from_slice(&output.range_proof[32..64]);
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&output.commitment);
+        hasher.update(&output.sender_public_key.serialize());
+        hasher.update(&output.receiver_public_key.serialize());
+        hasher.update(&msg_hash);
+        hasher.update(&proof_hash);
+        let msg32 = *hasher.finalize().as_bytes();
+
+        let sig = schnorr_sign(&sender, &msg32).unwrap();
+        assert_eq!(sig, output.signature);
+    }
+
+    /// Port of ltcd `TestRewindOutput` (`coin_test.go`).
+    #[test]
+    fn ltcd_rewind_output_vector() {
+        let secp = Secp256k1::new();
+        let output = ltcd_coin_output();
+        let keys = keys_from_secrets(
+            "164c6001b2623ed37be1c776567d12fe28c82664bd7497e63b0efcddb5b3ec48",
+            "ef66d0e0f7d2c59b3d7f5837ac4831ed0805f8f48f8bfd574a7fafc065b5747f",
+        );
+        let book = AddressBook::from_keys(&keys, 20, &secp).unwrap();
+        let coin = rewind_output(&keys, &book, &output, &secp)
+            .unwrap()
+            .expect("owned output");
+
+        assert_eq!(coin.amount, 10_000_000); // 0.1 LTC
+        assert_eq!(coin.address_index, 0);
+        assert_eq!(
+            keys.address(0, NetworkKind::Test, &secp).unwrap().to_string(),
+            "tmweb1qqv0mlyyk7sl09jkcrgy059m5yplw567ypuj6lxpwkcw4tl8m59p7wq6jc\
+             6prtph5kf45kdlql8fjppr32nmwng34fs6ess9fq72ck7lfyvmr6s0c"
+        );
+    }
+
+    /// Port of ltcd `TestRewindWrongScanKey`.
+    #[test]
+    fn ltcd_rewind_wrong_scan_key_fails() {
+        let secp = Secp256k1::new();
+        let seed = [0x5Au8; 32];
+        let keys =
+            MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
+                .unwrap();
+        let addr = keys.address(0, NetworkKind::Test, &secp).unwrap();
+        let (_, _, output) = create_output(&addr, 500_000, &secp).unwrap();
+
+        let mut wrong = keys.clone();
+        wrong.scan = bitcoin::secp256k1::SecretKey::from_slice(&[0x11u8; 32]).unwrap();
+        let book = AddressBook::from_keys(&wrong, 20, &secp).unwrap();
+        assert!(rewind_output(&wrong, &book, &output, &secp)
+            .unwrap()
+            .is_none());
+    }
+
+    /// Port of ltcd `TestOutputRoundTrip` (index 0).
+    #[test]
+    fn ltcd_output_roundtrip_index_zero() {
+        let secp = Secp256k1::new();
+        let seed = <[u8; 32]>::from_hex(
+            "2a64df085eefedd8bfdbb33176b5ba2e62e8be8b56c8837795598bb6c440c064",
+        )
+        .unwrap();
+        let keys =
+            MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::LitecoinCore, &secp)
+                .unwrap();
+        let addr = keys.address(0, NetworkKind::Main, &secp).unwrap();
+        let amount = 1_234_567u64;
+        let (_, _, output) = create_output(&addr, amount, &secp).unwrap();
+
+        let book = AddressBook::from_keys(&keys, 20, &secp).unwrap();
+        let coin = rewind_output(&keys, &book, &output, &secp)
+            .unwrap()
+            .expect("rewind");
+        assert_eq!(coin.amount, amount);
+        assert_eq!(coin.address_index, 0);
+
+        // Recovered spend key pubkey must match receiver pubkey.
+        let spend = coin.spend_key.expect("spend key");
+        let sk = bitcoin::secp256k1::SecretKey::from_slice(&spend).unwrap();
+        let got = PublicKey::from_secret_key(&secp, &sk);
+        assert_eq!(got, output.receiver_public_key);
+    }
+}

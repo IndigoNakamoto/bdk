@@ -4,9 +4,13 @@ MWEB primitives for the Litecoin BDK fork:
 
 - LIP-0004 / Litecoin Core stealth addresses
 - Core-compatible output rewind (`RewindOutput`) and `MwebCoinDatabase` (with `block_height`)
-- In-PSBT fund/sign/scrub/extract (`fund_mweb_spend` / `sign_funded_mweb` → native
-  `Psbt::extract_tx_with_mweb` on `litecoin` 0.32.8-rc.2)
-- `build_pegin` / `FinishedMwebPegin` for BDK-authored peg-in bodies (extract via native maps)
+- In-PSBT fund/sign/scrub/extract:
+  - send/peg-out: `fund_mweb_spend` / `sign_funded_mweb` → `Psbt::extract_tx_with_mweb`
+  - peg-in: `fund_mweb_pegin` / `sign_funded_mweb_pegin` → merge maps → extract
+    (`build_pegin` deprecated)
+- BIP32 origins `0x9A`/`0x9B` via `populate_mweb_key_origins` /
+  `validate_mweb_key_origins_against` (ltcwallet-shaped; hardware / multi-sig
+  coordinators can route on fingerprint + path; scrub leaves origins on the PSBT)
 - MW `secp256k1-zkp` FFI: 675-byte bulletproofs + schnorr
 - Feature `persist`: parallel `ChangeSet` for file_store
 - Feature `rusqlite`: SQLite-beside-wallet tables

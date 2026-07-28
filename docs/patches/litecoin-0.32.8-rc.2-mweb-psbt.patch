@@ -1,0 +1,2233 @@
+diff --git a/README.md b/README.md
+index 8c035c1..ffe018a 100644
+--- a/README.md
++++ b/README.md
+@@ -31,8 +31,9 @@ Supports (or should support)
+   (`ltcmweb` / `tmweb`)
+ * Private keys (WIF prefix `0xB0` mainnet / `0xEF` testnet) and BIP32 derivation
+ * Litecoin signed-message prefix (`\x19Litecoin Signed Message:\n`)
+-* PSBT v0 de/serialization and all but the Input Finalizer role; PSBT explicitly rejects
+-  Transactions carrying MWEB data, since BIP-174 has no field to round-trip it
++* PSBT v0 de/serialization and all but the Input Finalizer role; typed MWEB maps (`0x90+`)
++  round-trip offsets, kernels, and input/output fields — `mw_tx` is assembled only at
++  [`Psbt::extract_tx_with_mweb`], not on the unsigned transaction inside the PSBT
+ 
+ ## Known limitations
+ 
+diff --git a/litecoin/CHANGELOG.md b/litecoin/CHANGELOG.md
+index 4661e2a..9e4b3b5 100644
+--- a/litecoin/CHANGELOG.md
++++ b/litecoin/CHANGELOG.md
+@@ -1,3 +1,10 @@
++# 0.32.8-rc.2 - 2026-07-27
++
++- PSBT: first-class typed MWEB maps (`0x90+`) for global offsets, kernels, and input/output
++  fields; [`Psbt::extract_tx_with_mweb`] assembles `mw_tx` at extract time
++- PSBT: MWEB BIP32 origins `0x9A`/`0x9B` as `(PublicKey, KeySource)` matching ltcd
++  (`pubkey` key data + BIP174 KeySource value); ltcd inventory + empty-vin extract tests
++
+ # 0.32.8 - 2025-11-24
+ 
+ - Backport - bip158: Return no match for empty query [#4972](https://github.com/rust-bitcoin/rust-bitcoin/pull/4972)
+diff --git a/litecoin/Cargo.toml b/litecoin/Cargo.toml
+index f7d31d5..3be61eb 100644
+--- a/litecoin/Cargo.toml
++++ b/litecoin/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "litecoin"
+-version = "0.32.8-rc.1"
++version = "0.32.8-rc.2"
+ authors = ["Andrew Poelstra <apoelstra@wpsoftware.net>"]
+ license = "CC0-1.0"
+ repository = "https://github.com/rust-litecoin/rust-litecoin/"
+diff --git a/litecoin/src/psbt/error.rs b/litecoin/src/psbt/error.rs
+index f55c385..e39ed3b 100644
+--- a/litecoin/src/psbt/error.rs
++++ b/litecoin/src/psbt/error.rs
+@@ -45,6 +45,8 @@ pub enum Error {
+     /// PSBT v0 (BIP-174) has no field for MWEB data; including it would silently drop on
+     /// round-trip. Strip `mw_tx` / `is_hog_ex` before constructing the PSBT.
+     UnsupportedMwebOrHogEx,
++    /// Typed MWEB PSBT maps are present but incomplete for [`Psbt::extract_tx_with_mweb`].
++    IncompleteMwebMaps(&'static str),
+     /// A PSBT must have an unsigned transaction.
+     MustHaveUnsignedTx,
+     /// Signals that there are no more key-value pairs in a key-value map.
+@@ -128,6 +130,7 @@ impl fmt::Display for Error {
+                 f.write_str("the unsigned transaction has script witnesses"),
+             UnsupportedMwebOrHogEx =>
+                 f.write_str("PSBT cannot carry Litecoin MWEB transaction body or HogEx flag"),
++            IncompleteMwebMaps(msg) => write!(f, "incomplete MWEB PSBT maps: {}", msg),
+             MustHaveUnsignedTx =>
+                 f.write_str("partially signed transactions must have an unsigned transaction"),
+             NoMorePairs => f.write_str("no more key-value pairs for this psbt map"),
+@@ -186,6 +189,7 @@ impl std::error::Error for Error {
+             | UnsignedTxHasScriptSigs
+             | UnsignedTxHasScriptWitnesses
+             | UnsupportedMwebOrHogEx
++            | IncompleteMwebMaps(_)
+             | MustHaveUnsignedTx
+             | NoMorePairs
+             | UnexpectedUnsignedTx { .. }
+diff --git a/litecoin/src/psbt/map/global.rs b/litecoin/src/psbt/map/global.rs
+index 14d37c6..9f549f2 100644
+--- a/litecoin/src/psbt/map/global.rs
++++ b/litecoin/src/psbt/map/global.rs
+@@ -8,6 +8,7 @@ use crate::consensus::encode::MAX_VEC_SIZE;
+ use crate::consensus::{encode, Decodable};
+ use crate::prelude::*;
+ use crate::psbt::map::Map;
++use crate::psbt::mweb::{self, types::*};
+ use crate::psbt::{raw, Error, Psbt};
+ 
+ /// Type: Unsigned Transaction PSBT_GLOBAL_UNSIGNED_TX = 0x00
+@@ -57,6 +58,72 @@ impl Map for Psbt {
+             });
+         }
+ 
++        if let Some(off) = self.mweb_tx_offset {
++            rv.push(raw::Pair {
++                key: raw::Key { type_value: MWEB_TX_OFFSET_TYPE, key: vec![] },
++                value: off.to_vec(),
++            });
++        }
++        if let Some(off) = self.mweb_stealth_offset {
++            rv.push(raw::Pair {
++                key: raw::Key { type_value: MWEB_TX_STEALTH_OFFSET_TYPE, key: vec![] },
++                value: off.to_vec(),
++            });
++        }
++        if !self.mweb_kernels.is_empty() {
++            rv.push(raw::Pair {
++                key: raw::Key { type_value: MWEB_KERNEL_COUNT_TYPE, key: vec![] },
++                value: (self.mweb_kernels.len() as u32).to_le_bytes().to_vec(),
++            });
++            for (i, kernel) in self.mweb_kernels.iter().enumerate() {
++                for (field_ty, key_suffix, value) in kernel.to_kv_pairs() {
++                    let mut key = (i as u32).to_le_bytes().to_vec();
++                    key.push(field_ty);
++                    key.extend_from_slice(&key_suffix);
++                    rv.push(raw::Pair {
++                        key: raw::Key {
++                            type_value: MWEB_GLOBAL_KERNEL_FIELD_TYPE,
++                            key,
++                        },
++                        value,
++                    });
++                }
++            }
++        }
++
++        if !self.mweb_inputs.is_empty() {
++            for (i, inp) in self.mweb_inputs.iter().enumerate() {
++                for (field_ty, key_data, value) in inp.to_kv_pairs() {
++                    // Parallel pure-MWEB maps: key = index (4 LE) || optional pubkey for origins.
++                    let mut key = (i as u32).to_le_bytes().to_vec();
++                    key.extend_from_slice(&key_data);
++                    rv.push(raw::Pair {
++                        key: raw::Key {
++                            type_value: field_ty,
++                            key,
++                        },
++                        value,
++                    });
++                }
++            }
++        }
++
++        if !self.mweb_outputs.is_empty() {
++            for (i, out) in self.mweb_outputs.iter().enumerate() {
++                for (field_ty, value) in out.to_pairs() {
++                    let mut key = (i as u32).to_le_bytes().to_vec();
++                    key.push(field_ty);
++                    rv.push(raw::Pair {
++                        key: raw::Key {
++                            type_value: MWEB_GLOBAL_OUTPUT_FIELD_TYPE,
++                            key,
++                        },
++                        value,
++                    });
++                }
++            }
++        }
++
+         for (key, value) in self.proprietary.iter() {
+             rv.push(raw::Pair { key: key.to_key(), value: value.clone() });
+         }
+@@ -77,6 +144,11 @@ impl Psbt {
+         let mut unknowns: BTreeMap<raw::Key, Vec<u8>> = Default::default();
+         let mut xpub_map: BTreeMap<Xpub, (Fingerprint, DerivationPath)> = Default::default();
+         let mut proprietary: BTreeMap<raw::ProprietaryKey, Vec<u8>> = Default::default();
++        let mut mweb_tx_offset: Option<[u8; 32]> = None;
++        let mut mweb_stealth_offset: Option<[u8; 32]> = None;
++        let mut mweb_kernels: Vec<mweb::MwebKernel> = Vec::new();
++        let mut mweb_inputs: Vec<mweb::MwebInput> = Vec::new();
++        let mut mweb_outputs: Vec<mweb::MwebOutput> = Vec::new();
+ 
+         loop {
+             match raw::Pair::decode(&mut r) {
+@@ -185,6 +257,58 @@ impl Psbt {
+                             btree_map::Entry::Occupied(_) =>
+                                 return Err(Error::DuplicateKey(pair.key)),
+                         },
++                        MWEB_TX_OFFSET_TYPE if pair.key.key.is_empty() => {
++                            if mweb_tx_offset.is_some() {
++                                return Err(Error::DuplicateKey(pair.key));
++                            }
++                            if pair.value.len() != 32 {
++                                return Err(Error::InvalidKey(pair.key));
++                            }
++                            let mut off = [0u8; 32];
++                            off.copy_from_slice(&pair.value);
++                            mweb_tx_offset = Some(off);
++                        }
++                        MWEB_TX_STEALTH_OFFSET_TYPE if pair.key.key.is_empty() => {
++                            if mweb_stealth_offset.is_some() {
++                                return Err(Error::DuplicateKey(pair.key));
++                            }
++                            if pair.value.len() != 32 {
++                                return Err(Error::InvalidKey(pair.key));
++                            }
++                            let mut off = [0u8; 32];
++                            off.copy_from_slice(&pair.value);
++                            mweb_stealth_offset = Some(off);
++                        }
++                        MWEB_KERNEL_COUNT_TYPE if pair.key.key.is_empty() => {
++                            // Count is informational; kernel maps come from `0x93` pairs.
++                            if pair.value.len() != 4 {
++                                return Err(Error::InvalidKey(pair.key));
++                            }
++                        }
++                        MWEB_GLOBAL_KERNEL_FIELD_TYPE if pair.key.key.len() >= 5 => {
++                            let idx = u32::from_le_bytes(pair.key.key[..4].try_into().unwrap())
++                                as usize;
++                            let field_ty = pair.key.key[4];
++                            let key_data = &pair.key.key[5..];
++                            mweb::ensure_index(&mut mweb_kernels, idx);
++                            mweb_kernels[idx].apply_field(field_ty, key_data, &pair.value);
++                        }
++                        MWEB_GLOBAL_OUTPUT_FIELD_TYPE if pair.key.key.len() == 5 => {
++                            let idx = u32::from_le_bytes(pair.key.key[..4].try_into().unwrap())
++                                as usize;
++                            let field_ty = pair.key.key[4];
++                            mweb::ensure_index(&mut mweb_outputs, idx);
++                            mweb_outputs[idx].apply_field(field_ty, &pair.value);
++                        }
++                        ty if (MWEB_INPUT_FIELD_MIN..=MWEB_INPUT_FIELD_MAX).contains(&ty)
++                            && pair.key.key.len() >= 4 =>
++                        {
++                            let idx = u32::from_le_bytes(pair.key.key[..4].try_into().unwrap())
++                                as usize;
++                            let key_data = &pair.key.key[4..];
++                            mweb::ensure_index(&mut mweb_inputs, idx);
++                            mweb_inputs[idx].apply_kv_field(ty, key_data, &pair.value);
++                        }
+                         _ => match unknowns.entry(pair.key) {
+                             btree_map::Entry::Vacant(empty_key) => {
+                                 empty_key.insert(pair.value);
+@@ -206,6 +330,11 @@ impl Psbt {
+                 xpub: xpub_map,
+                 proprietary,
+                 unknown: unknowns,
++                mweb_tx_offset,
++                mweb_stealth_offset,
++                mweb_kernels,
++                mweb_inputs,
++                mweb_outputs,
+                 inputs: vec![],
+                 outputs: vec![],
+             })
+diff --git a/litecoin/src/psbt/map/input.rs b/litecoin/src/psbt/map/input.rs
+index 56c4bff..d8b7137 100644
+--- a/litecoin/src/psbt/map/input.rs
++++ b/litecoin/src/psbt/map/input.rs
+@@ -14,6 +14,7 @@ use crate::crypto::key::PublicKey;
+ use crate::crypto::{ecdsa, taproot};
+ use crate::prelude::*;
+ use crate::psbt::map::Map;
++use crate::psbt::mweb::{self, types::*};
+ use crate::psbt::serialize::Deserialize;
+ use crate::psbt::{self, error, raw, Error};
+ use crate::sighash::{
+@@ -130,6 +131,8 @@ pub struct Input {
+     /// Unknown key-value pairs for this input.
+     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
+     pub unknown: BTreeMap<raw::Key, Vec<u8>>,
++    /// MWEB fields for this input (`0x90`..=`0x9C`, empty key).
++    pub mweb: mweb::MwebInput,
+ }
+ 
+ /// A Signature hash type for the corresponding input.
+@@ -362,6 +365,19 @@ impl Input {
+                     btree_map::Entry::Occupied(_) => return Err(Error::DuplicateKey(raw_key)),
+                 }
+             }
++            ty if (MWEB_INPUT_FIELD_MIN..=MWEB_INPUT_FIELD_MAX).contains(&ty) => {
++                // ltcd: most MWEB fields use empty key; 0x9A/0x9B use compressed pubkey as key.
++                let is_origin = ty == MWEB_MASTER_SCAN_KEY_ORIGIN_TYPE
++                    || ty == MWEB_MASTER_SPEND_KEY_ORIGIN_TYPE;
++                if is_origin {
++                    if raw_key.key.is_empty() {
++                        return Err(Error::InvalidKey(raw_key));
++                    }
++                } else if !raw_key.key.is_empty() {
++                    return Err(Error::InvalidKey(raw_key));
++                }
++                self.mweb.apply_kv_field(ty, &raw_key.key, &raw_value);
++            }
+             _ => match self.unknown.entry(raw_key) {
+                 btree_map::Entry::Vacant(empty_key) => {
+                     empty_key.insert(raw_value);
+@@ -393,6 +409,7 @@ impl Input {
+         self.tap_key_origins.extend(other.tap_key_origins);
+         self.proprietary.extend(other.proprietary);
+         self.unknown.extend(other.unknown);
++        self.mweb.combine(other.mweb);
+ 
+         combine!(redeem_script, self, other);
+         combine!(witness_script, self, other);
+@@ -483,6 +500,13 @@ impl Map for Input {
+         impl_psbt_get_pair! {
+             rv.push(self.tap_merkle_root, PSBT_IN_TAP_MERKLE_ROOT)
+         }
++        for (field_ty, key_data, value) in self.mweb.to_kv_pairs() {
++            rv.push(raw::Pair {
++                key: raw::Key { type_value: field_ty, key: key_data },
++                value,
++            });
++        }
++
+         for (key, value) in self.proprietary.iter() {
+             rv.push(raw::Pair { key: key.to_key(), value: value.clone() });
+         }
+diff --git a/litecoin/src/psbt/map/output.rs b/litecoin/src/psbt/map/output.rs
+index 90080b6..fc091c7 100644
+--- a/litecoin/src/psbt/map/output.rs
++++ b/litecoin/src/psbt/map/output.rs
+@@ -6,6 +6,7 @@ use crate::bip32::KeySource;
+ use crate::blockdata::script::ScriptBuf;
+ use crate::prelude::*;
+ use crate::psbt::map::Map;
++use crate::psbt::mweb::{self, types::*};
+ use crate::psbt::{raw, Error};
+ use crate::taproot::{TapLeafHash, TapTree};
+ 
+@@ -51,6 +52,8 @@ pub struct Output {
+     /// Unknown key-value pairs for this output.
+     #[cfg_attr(feature = "serde", serde(with = "crate::serde_utils::btreemap_as_seq_byte_values"))]
+     pub unknown: BTreeMap<raw::Key, Vec<u8>>,
++    /// MWEB fields for this output (`0x90`..=`0x98`, empty key).
++    pub mweb: mweb::MwebOutput,
+ }
+ 
+ impl Output {
+@@ -97,6 +100,12 @@ impl Output {
+                     self.tap_key_origins <= <raw_key: XOnlyPublicKey>|< raw_value: (Vec<TapLeafHash>, KeySource)>
+                 }
+             }
++            ty if (MWEB_OUTPUT_FIELD_MIN..=MWEB_OUTPUT_FIELD_MAX).contains(&ty) => {
++                if !raw_key.key.is_empty() {
++                    return Err(Error::InvalidKey(raw_key));
++                }
++                self.mweb.apply_field(ty, &raw_value);
++            }
+             _ => match self.unknown.entry(raw_key) {
+                 btree_map::Entry::Vacant(empty_key) => {
+                     empty_key.insert(raw_value);
+@@ -114,6 +123,7 @@ impl Output {
+         self.proprietary.extend(other.proprietary);
+         self.unknown.extend(other.unknown);
+         self.tap_key_origins.extend(other.tap_key_origins);
++        self.mweb.combine(other.mweb);
+ 
+         combine!(redeem_script, self, other);
+         combine!(witness_script, self, other);
+@@ -150,6 +160,13 @@ impl Map for Output {
+             rv.push_map(self.tap_key_origins, PSBT_OUT_TAP_BIP32_DERIVATION)
+         }
+ 
++        for (field_ty, value) in self.mweb.to_pairs() {
++            rv.push(raw::Pair {
++                key: raw::Key { type_value: field_ty, key: vec![] },
++                value,
++            });
++        }
++
+         for (key, value) in self.proprietary.iter() {
+             rv.push(raw::Pair { key: key.to_key(), value: value.clone() });
+         }
+diff --git a/litecoin/src/psbt/mod.rs b/litecoin/src/psbt/mod.rs
+index e51a662..f1923b4 100644
+--- a/litecoin/src/psbt/mod.rs
++++ b/litecoin/src/psbt/mod.rs
+@@ -13,6 +13,7 @@
+ mod macros;
+ mod error;
+ mod map;
++pub mod mweb;
+ pub mod raw;
+ pub mod serialize;
+ 
+@@ -37,6 +38,22 @@ use crate::{Amount, FeeRate, TapLeafHash, TapSighashType};
+ pub use self::{
+     map::{Input, Output, PsbtSighashType},
+     error::Error,
++    mweb::{MwebInput, MwebKernel, MwebOutput},
++};
++pub use self::mweb::types::{
++    MWEB_ADDRESS_INDEX_TYPE, MWEB_COMMIT_OUTPUT_TYPE, MWEB_EXTRA_DATA_OUTPUT_TYPE,
++    MWEB_GLOBAL_KERNEL_FIELD_TYPE, MWEB_GLOBAL_OUTPUT_FIELD_TYPE, MWEB_INPUT_AMOUNT_TYPE,
++    MWEB_INPUT_EXTRA_DATA_TYPE, MWEB_INPUT_FEATURES_TYPE, MWEB_INPUT_PUBKEY_TYPE,
++    MWEB_INPUT_SIGNATURE_TYPE, MWEB_KERNEL_COUNT_TYPE, MWEB_KERNEL_EXCESS_COMMIT_TYPE,
++    MWEB_KERNEL_EXTRA_DATA_TYPE, MWEB_KERNEL_FEATURES_TYPE, MWEB_KERNEL_FEE_TYPE,
++    MWEB_KERNEL_LOCK_HEIGHT_TYPE, MWEB_KERNEL_PEGOUT_TYPE, MWEB_KERNEL_PEGIN_AMOUNT_TYPE,
++    MWEB_KERNEL_SIGNATURE_TYPE, MWEB_KERNEL_STEALTH_COMMIT_TYPE, MWEB_KEY_EXCHANGE_PUBKEY_TYPE,
++    MWEB_MASTER_SCAN_KEY_ORIGIN_TYPE, MWEB_MASTER_SPEND_KEY_ORIGIN_TYPE,
++    MWEB_OUTPUT_PUBKEY_OUTPUT_TYPE, MWEB_RANGE_PROOF_OUTPUT_TYPE,
++    MWEB_SENDER_PUBKEY_OUTPUT_TYPE, MWEB_SHARED_SECRET_TYPE, MWEB_SIGNATURE_OUTPUT_TYPE,
++    MWEB_SPENT_OUTPUT_COMMIT_TYPE, MWEB_SPENT_OUTPUT_ID_TYPE, MWEB_SPENT_OUTPUT_PUBKEY_TYPE,
++    MWEB_STANDARD_FIELDS_OUTPUT_TYPE, MWEB_STEALTH_ADDRESS_OUTPUT_TYPE,
++    MWEB_TX_OFFSET_TYPE, MWEB_TX_STEALTH_OFFSET_TYPE, MWEB_FEATURES_OUTPUT_TYPE,
+ };
+ 
+ /// A Partially Signed Transaction.
+@@ -62,6 +79,17 @@ pub struct Psbt {
+     pub inputs: Vec<Input>,
+     /// The corresponding key-value map for each output in the unsigned transaction.
+     pub outputs: Vec<Output>,
++
++    /// MWEB kernel offset (global `0x90`).
++    pub mweb_tx_offset: Option<[u8; 32]>,
++    /// MWEB stealth offset (global `0x91`).
++    pub mweb_stealth_offset: Option<[u8; 32]>,
++    /// MWEB kernel maps (global `0x92` count + `0x93` field pairs).
++    pub mweb_kernels: Vec<mweb::MwebKernel>,
++    /// Parallel MWEB input maps when `unsigned_tx` has fewer vin than MWEB inputs.
++    pub mweb_inputs: Vec<mweb::MwebInput>,
++    /// Parallel MWEB output maps when `unsigned_tx` has fewer vout than MWEB outputs.
++    pub mweb_outputs: Vec<mweb::MwebOutput>,
+ }
+ 
+ impl Psbt {
+@@ -125,6 +153,11 @@ impl Psbt {
+             version: 0,
+             proprietary: Default::default(),
+             unknown: Default::default(),
++            mweb_tx_offset: None,
++            mweb_stealth_offset: None,
++            mweb_kernels: Vec::new(),
++            mweb_inputs: Vec::new(),
++            mweb_outputs: Vec::new(),
+         };
+         psbt.unsigned_tx_checks()?;
+         Ok(psbt)
+@@ -221,6 +254,56 @@ impl Psbt {
+         Ok(tx)
+     }
+ 
++    /// Extract a network [`Transaction`] with `mw_tx` assembled from typed MWEB PSBT maps.
++    ///
++    /// The transparent portion is finalized from per-input `final_script_sig` / `final_script_witness`
++    /// like [`extract_tx_unchecked_fee_rate`]. MWEB body fields come from global offsets,
++    /// ([`Self::mweb_inputs`] / [`Self::mweb_outputs`]) when non-empty. If parallel input maps are
++    /// empty, per-slot [`Input::mweb`] is used only when at least one slot has `output_id` (pure
++    /// peg-ins keep `mweb_inputs` empty on purpose). Same rule for outputs via `commit`.
++    pub fn extract_tx_with_mweb(&self) -> Result<Transaction, Error> {
++        let kernel_offset = self
++            .mweb_tx_offset
++            .ok_or(Error::IncompleteMwebMaps("missing mweb_tx_offset"))?;
++        let stealth_offset = self
++            .mweb_stealth_offset
++            .ok_or(Error::IncompleteMwebMaps("missing mweb_stealth_offset"))?;
++
++        // Peg-in / hybrid txs often set parallel `mweb_outputs` + `mweb_kernels` with an empty
++        // `mweb_inputs` vec (no MWEB spends). Do **not** fall back to per-slot `Input::mweb` in
++        // that case — transparent vins carry default-empty maps and would fail assemble.
++        let inputs: Vec<MwebInput> = if !self.mweb_inputs.is_empty() {
++            self.mweb_inputs.clone()
++        } else if self.inputs.iter().any(|i| i.mweb.output_id.is_some()) {
++            self.inputs.iter().map(|i| i.mweb.clone()).collect()
++        } else {
++            Vec::new()
++        };
++        let outputs: Vec<MwebOutput> = if !self.mweb_outputs.is_empty() {
++            self.mweb_outputs.clone()
++        } else if self.outputs.iter().any(|o| o.mweb.commit.is_some()) {
++            self.outputs.iter().map(|o| o.mweb.clone()).collect()
++        } else {
++            Vec::new()
++        };
++
++        let mw = mweb::assemble_mw_tx(
++            kernel_offset,
++            stealth_offset,
++            &inputs,
++            &outputs,
++            &self.mweb_kernels,
++        )?;
++
++        let mut tx = self.unsigned_tx.clone();
++        for (vin, psbtin) in tx.input.iter_mut().zip(self.inputs.iter()) {
++            vin.script_sig = psbtin.final_script_sig.clone().unwrap_or_default();
++            vin.witness = psbtin.final_script_witness.clone().unwrap_or_default();
++        }
++        tx.mw_tx = Some(mw);
++        Ok(tx)
++    }
++
+     /// Combines this [`Psbt`] with `other` PSBT as described by BIP 174.
+     ///
+     /// In accordance with BIP 174 this function is commutative i.e., `A.combine(B) == B.combine(A)`
+@@ -276,6 +359,25 @@ impl Psbt {
+         self.proprietary.extend(other.proprietary);
+         self.unknown.extend(other.unknown);
+ 
++        if self.mweb_tx_offset.is_none() {
++            self.mweb_tx_offset = other.mweb_tx_offset;
++        }
++        if self.mweb_stealth_offset.is_none() {
++            self.mweb_stealth_offset = other.mweb_stealth_offset;
++        }
++        for (i, other_kernel) in other.mweb_kernels.into_iter().enumerate() {
++            mweb::ensure_index(&mut self.mweb_kernels, i);
++            self.mweb_kernels[i].combine(other_kernel);
++        }
++        for (i, other_inp) in other.mweb_inputs.into_iter().enumerate() {
++            mweb::ensure_index(&mut self.mweb_inputs, i);
++            self.mweb_inputs[i].combine(other_inp);
++        }
++        for (i, other_out) in other.mweb_outputs.into_iter().enumerate() {
++            mweb::ensure_index(&mut self.mweb_outputs, i);
++            self.mweb_outputs[i].combine(other_out);
++        }
++
+         for (self_input, other_input) in self.inputs.iter_mut().zip(other.inputs.into_iter()) {
+             self_input.combine(other_input);
+         }
+@@ -1343,6 +1445,11 @@ mod tests {
+                 ..Default::default()
+             }],
+             outputs: vec![],
++            mweb_tx_offset: None,
++            mweb_stealth_offset: None,
++            mweb_kernels: vec![],
++            mweb_inputs: vec![],
++            mweb_outputs: vec![],
+         }
+     }
+ 
+@@ -1364,6 +1471,11 @@ mod tests {
+ 
+             inputs: vec![],
+             outputs: vec![],
++            mweb_tx_offset: None,
++            mweb_stealth_offset: None,
++            mweb_kernels: vec![],
++            mweb_inputs: vec![],
++            mweb_outputs: vec![],
+         };
+         assert_eq!(psbt.serialize_hex(), "70736274ff01000a0200000000000000000000");
+     }
+@@ -1519,6 +1631,11 @@ mod tests {
+             unknown: Default::default(),
+             inputs: vec![Input::default()],
+             outputs: vec![Output::default(), Output::default()],
++            mweb_tx_offset: None,
++            mweb_stealth_offset: None,
++            mweb_kernels: vec![],
++            mweb_inputs: vec![],
++            mweb_outputs: vec![],
+         };
+ 
+         let actual: Psbt = Psbt::deserialize(&expected.serialize()).unwrap();
+@@ -1653,6 +1770,11 @@ mod tests {
+                     ..Default::default()
+                 }
+             ],
++            mweb_tx_offset: None,
++            mweb_stealth_offset: None,
++            mweb_kernels: vec![],
++            mweb_inputs: vec![],
++            mweb_outputs: vec![],
+         };
+         let encoded = serde_json::to_string(&psbt).unwrap();
+         let decoded: Psbt = serde_json::from_str(&encoded).unwrap();
+@@ -1823,6 +1945,11 @@ mod tests {
+                         ..Default::default()
+                     },
+                 ],
++                mweb_tx_offset: None,
++                mweb_stealth_offset: None,
++                mweb_kernels: vec![],
++                mweb_inputs: vec![],
++                mweb_outputs: vec![],
+             };
+ 
+             let base16str = "70736274ff0100750200000001268171371edff285e937adeea4b37b78000c0566cbb3ad64641713ca42171bf60000000000feffffff02d3dff505000000001976a914d0c59903c5bac2868760e90fd521a4665aa7652088ac00e1f5050000000017a9143545e6e33b832c47050f24d3eeb93c9c03948bc787b32e1300000100fda5010100000000010289a3c71eab4d20e0371bbba4cc698fa295c9463afa2e397f8533ccb62f9567e50100000017160014be18d152a9b012039daf3da7de4f53349eecb985ffffffff86f8aa43a71dff1448893a530a7237ef6b4608bbb2dd2d0171e63aec6a4890b40100000017160014fe3e9ef1a745e974d902c4355943abcb34bd5353ffffffff0200c2eb0b000000001976a91485cff1097fd9e008bb34af709c62197b38978a4888ac72fef84e2c00000017a914339725ba21efd62ac753a9bcd067d6c7a6a39d05870247304402202712be22e0270f394f568311dc7ca9a68970b8025fdd3b240229f07f8a5f3a240220018b38d7dcd314e734c9276bd6fb40f673325bc4baa144c800d2f2f02db2765c012103d2e15674941bad4a996372cb87e1856d3652606d98562fe39c5e9e7e413f210502483045022100d12b852d85dcd961d2f5f4ab660654df6eedcc794c0c33ce5cc309ffb5fce58d022067338a8e0e1725c197fb1a88af59f51e44e4255b20167c8684031c05d1f2592a01210223b72beef0965d10be0778efecd61fcac6f79a4ea169393380734464f84f2ab300000000000000";
+@@ -2159,6 +2286,11 @@ mod tests {
+                     ..Default::default()
+                 },
+             ],
++            mweb_tx_offset: None,
++            mweb_stealth_offset: None,
++            mweb_kernels: vec![],
++            mweb_inputs: vec![],
++            mweb_outputs: vec![],
+         };
+         unserialized.inputs[0].hash160_preimages = hash160_preimages;
+         unserialized.inputs[0].sha256_preimages = sha256_preimages;
+@@ -2359,6 +2491,11 @@ mod tests {
+                     ..Default::default()
+                 },
+             ],
++            mweb_tx_offset: None,
++            mweb_stealth_offset: None,
++            mweb_kernels: vec![],
++            mweb_inputs: vec![],
++            mweb_outputs: vec![],
+         };
+         assert_eq!(
+             t.fee().expect("fee calculation"),
+@@ -2387,6 +2524,226 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn mweb_psbt_parallel_maps_roundtrip_and_extract() {
++        use crate::blockdata::transaction;
++        use secp256k1::{Secp256k1, SecretKey};
++
++        fn test_pubkey(seed: u8) -> Vec<u8> {
++            let sk = SecretKey::from_slice(&[seed; 32]).expect("valid secret");
++            sk.public_key(&Secp256k1::new()).serialize().to_vec()
++        }
++
++        let mut commit = [0u8; 33];
++        commit[0] = 2;
++        let mut excess = [0u8; 33];
++        excess[0] = 2;
++        excess[1] = 1;
++
++        let mweb_in = MwebInput {
++            output_id: Some([8u8; 32]),
++            commit: Some(commit),
++            output_pubkey: Some(test_pubkey(3)),
++            signature: Some(vec![0u8; 64]),
++            ..MwebInput::default()
++        };
++        let mut stealth = Vec::new();
++        stealth.extend(test_pubkey(10));
++        stealth.extend(test_pubkey(11));
++        let mweb_out = MwebOutput {
++            stealth_address: Some(stealth),
++            commit: Some(commit),
++            sender_pubkey: Some(test_pubkey(4)),
++            output_pubkey: Some(test_pubkey(5)),
++            range_proof: Some(vec![0u8; 675]),
++            signature: Some(vec![0u8; 64]),
++            ..MwebOutput::default()
++        };
++        let kernel = MwebKernel {
++            excess_commit: Some(excess),
++            fee: Some(5000),
++            features: Some(0),
++            signature: Some([0u8; 64]),
++            ..MwebKernel::default()
++        };
++
++        let psbt = Psbt {
++            unsigned_tx: Transaction {
++                version: transaction::Version::TWO,
++                lock_time: absolute::LockTime::ZERO,
++                input: vec![],
++                output: vec![],
++                mw_tx: None,
++                is_hog_ex: false,
++            },
++            version: 0,
++            xpub: Default::default(),
++            proprietary: Default::default(),
++            unknown: Default::default(),
++            inputs: vec![],
++            outputs: vec![],
++            mweb_tx_offset: Some([1u8; 32]),
++            mweb_stealth_offset: Some([2u8; 32]),
++            mweb_kernels: vec![kernel],
++            mweb_inputs: vec![mweb_in],
++            mweb_outputs: vec![mweb_out],
++        };
++
++        let bytes = psbt.serialize();
++        let decoded = Psbt::deserialize(&bytes).unwrap();
++        assert_eq!(decoded.mweb_tx_offset, psbt.mweb_tx_offset);
++        assert_eq!(decoded.mweb_stealth_offset, psbt.mweb_stealth_offset);
++        assert_eq!(decoded.mweb_kernels.len(), 1);
++        assert_eq!(decoded.mweb_inputs.len(), 1);
++        assert_eq!(decoded.mweb_outputs.len(), 1);
++        assert_eq!(
++            decoded.mweb_outputs[0].stealth_address.as_ref().unwrap().len(),
++            66
++        );
++
++        let tx = decoded.extract_tx_with_mweb().unwrap();
++        assert!(tx.mw_tx.is_some());
++        assert_eq!(tx.mw_tx.as_ref().unwrap().kernel_offset, [1u8; 32]);
++        assert_eq!(tx.mw_tx.as_ref().unwrap().body.kernels[0].fee, Some(5000));
++    }
++
++    #[test]
++    fn mweb_psbt_key_origins_roundtrip_ltcd_shape() {
++        use crate::bip32::{ChildNumber, DerivationPath, Fingerprint};
++        use crate::blockdata::transaction;
++        use crate::psbt::serialize::Serialize;
++        use secp256k1::{Secp256k1, SecretKey};
++
++        let sk = SecretKey::from_slice(&[9u8; 32]).unwrap();
++        let pk = sk.public_key(&Secp256k1::new());
++        let fp = Fingerprint::from([0xab, 0xcd, 0xef, 0x01]);
++        let scan_path: DerivationPath = vec![
++            ChildNumber::from_hardened_idx(0).unwrap(),
++            ChildNumber::from_hardened_idx(100).unwrap(),
++            ChildNumber::from_hardened_idx(0).unwrap(),
++        ]
++        .into();
++        let spend_path: DerivationPath = vec![
++            ChildNumber::from_hardened_idx(0).unwrap(),
++            ChildNumber::from_hardened_idx(100).unwrap(),
++            ChildNumber::from_hardened_idx(1).unwrap(),
++        ]
++        .into();
++
++        let mweb_in = MwebInput {
++            output_id: Some([3u8; 32]),
++            address_index: Some(0),
++            master_scan_key_origin: Some((pk, (fp, scan_path.clone()))),
++            master_spend_key_origin: Some((pk, (fp, spend_path.clone()))),
++            ..MwebInput::default()
++        };
++        mweb_in.validate_key_origins().unwrap();
++
++        let psbt = Psbt {
++            unsigned_tx: Transaction {
++                version: transaction::Version::TWO,
++                lock_time: absolute::LockTime::ZERO,
++                input: vec![],
++                output: vec![],
++                mw_tx: None,
++                is_hog_ex: false,
++            },
++            version: 0,
++            xpub: Default::default(),
++            proprietary: Default::default(),
++            unknown: Default::default(),
++            inputs: vec![],
++            outputs: vec![],
++            mweb_tx_offset: Some([1u8; 32]),
++            mweb_stealth_offset: Some([2u8; 32]),
++            mweb_kernels: vec![],
++            mweb_inputs: vec![mweb_in.clone()],
++            mweb_outputs: vec![],
++        };
++
++        let decoded = Psbt::deserialize(&psbt.serialize()).unwrap();
++        assert_eq!(decoded.mweb_inputs.len(), 1);
++        let got = &decoded.mweb_inputs[0];
++        assert_eq!(got.address_index, Some(0));
++        let (got_pk, got_ks) = got.master_scan_key_origin.as_ref().unwrap();
++        assert_eq!(*got_pk, pk);
++        assert_eq!(got_ks.0, fp);
++        assert_eq!(got_ks.1, scan_path);
++        // ltcd SerializeBIP32Derivation wire: fingerprint || LE path indexes
++        assert_eq!(got_ks.serialize(), (fp, scan_path).serialize());
++    }
++
++    /// Mirror ltcd `types.go` inventory + empty-vin pure-MWEB extract acceptance.
++    #[test]
++    fn mweb_psbt_ltcd_vector_inventory_and_empty_vin() {
++        use crate::blockdata::transaction;
++        use crate::psbt::mweb::types::*;
++
++        assert_eq!(MWEB_TX_OFFSET_TYPE, 0x90);
++        assert_eq!(MWEB_TX_STEALTH_OFFSET_TYPE, 0x91);
++        assert_eq!(MWEB_KERNEL_COUNT_TYPE, 0x92);
++        assert_eq!(MWEB_SPENT_OUTPUT_ID_TYPE, 0x90);
++        assert_eq!(MWEB_MASTER_SCAN_KEY_ORIGIN_TYPE, 0x9A);
++        assert_eq!(MWEB_MASTER_SPEND_KEY_ORIGIN_TYPE, 0x9B);
++        assert_eq!(MWEB_STEALTH_ADDRESS_OUTPUT_TYPE, 0x90);
++        assert_eq!(MWEB_KERNEL_PEGIN_AMOUNT_TYPE, 3);
++        assert_eq!(MWEB_KERNEL_PEGOUT_TYPE, 4);
++
++        // Pure MWEB: empty transparent vin/vout is valid (ltcd allows MWEB-only packets).
++        let mut commit = [0u8; 33];
++        commit[0] = 2;
++        let mut excess = [0u8; 33];
++        excess[0] = 2;
++        excess[1] = 9;
++        let sk = secp256k1::SecretKey::from_slice(&[5u8; 32]).unwrap();
++        let pk = sk.public_key(&secp256k1::Secp256k1::new()).serialize().to_vec();
++
++        let psbt = Psbt {
++            unsigned_tx: Transaction {
++                version: transaction::Version::TWO,
++                lock_time: absolute::LockTime::ZERO,
++                input: vec![],
++                output: vec![],
++                mw_tx: None,
++                is_hog_ex: false,
++            },
++            version: 0,
++            xpub: Default::default(),
++            proprietary: Default::default(),
++            unknown: Default::default(),
++            inputs: vec![],
++            outputs: vec![],
++            mweb_tx_offset: Some([4u8; 32]),
++            mweb_stealth_offset: Some([5u8; 32]),
++            mweb_kernels: vec![MwebKernel {
++                excess_commit: Some(excess),
++                fee: Some(100),
++                features: Some(0),
++                signature: Some([0u8; 64]),
++                ..MwebKernel::default()
++            }],
++            mweb_inputs: vec![MwebInput {
++                output_id: Some([6u8; 32]),
++                commit: Some(commit),
++                output_pubkey: Some(pk.clone()),
++                signature: Some(vec![0u8; 64]),
++                ..MwebInput::default()
++            }],
++            mweb_outputs: vec![MwebOutput {
++                commit: Some(commit),
++                sender_pubkey: Some(pk.clone()),
++                output_pubkey: Some(pk),
++                range_proof: Some(vec![0u8; 675]),
++                signature: Some(vec![0u8; 64]),
++                ..MwebOutput::default()
++            }],
++        };
++        let round = Psbt::deserialize(&psbt.serialize()).unwrap();
++        let tx = round.extract_tx_with_mweb().unwrap();
++        assert!(tx.input.is_empty());
++        assert!(tx.mw_tx.is_some());
++    }
++
+     #[test]
+     #[cfg(feature = "rand-std")]
+     fn hashmap_can_sign_taproot() {
+diff --git a/litecoin/src/psbt/mweb/extract.rs b/litecoin/src/psbt/mweb/extract.rs
+new file mode 100644
+index 0000000..3ff963d
+--- /dev/null
++++ b/litecoin/src/psbt/mweb/extract.rs
+@@ -0,0 +1,183 @@
++// SPDX-License-Identifier: CC0-1.0
++
++use secp256k1::PublicKey;
++
++use crate::blockdata::mimblewimble::{
++    self, Input, Kernel, Output, OutputMessage, OutputMessageStandardFields,
++    Transaction as MwebTransaction,
++};
++use crate::prelude::*;
++use crate::psbt::Error;
++use crate::psbt::mweb::{MwebInput, MwebKernel, MwebOutput};
++
++/// Assemble a wire [`mimblewimble::Transaction`] from typed PSBT MWEB maps.
++///
++/// Cryptographic validity (range proofs, kernel signatures, balance) is not checked.
++pub fn assemble_mw_tx(
++    kernel_offset: [u8; 32],
++    stealth_offset: [u8; 32],
++    inputs: &[MwebInput],
++    outputs: &[MwebOutput],
++    kernels: &[MwebKernel],
++) -> Result<MwebTransaction, Error> {
++    let mut wire_inputs = Vec::with_capacity(inputs.len());
++    for inp in inputs {
++        wire_inputs.push(wire_input_from_map(inp)?);
++    }
++    let mut wire_outputs = Vec::with_capacity(outputs.len());
++    for out in outputs {
++        wire_outputs.push(wire_output_from_map(out)?);
++    }
++    let mut wire_kernels = Vec::with_capacity(kernels.len());
++    for k in kernels {
++        wire_kernels.push(wire_kernel_from_map(k)?);
++    }
++    Ok(MwebTransaction {
++        kernel_offset,
++        stealth_offset,
++        body: mimblewimble::TxBody {
++            inputs: wire_inputs,
++            outputs: wire_outputs,
++            kernels: wire_kernels,
++        },
++    })
++}
++
++pub(crate) fn wire_input_from_map(inp: &MwebInput) -> Result<Input, Error> {
++    let output_id = inp
++        .output_id
++        .ok_or(Error::IncompleteMwebMaps("input map missing output_id"))?;
++    let commitment = inp
++        .commit
++        .ok_or(Error::IncompleteMwebMaps("input map missing commit"))?;
++    let features = inp.features.unwrap_or(0);
++    let output_public_key = PublicKey::from_slice(
++        inp.output_pubkey
++            .as_ref()
++            .ok_or(Error::IncompleteMwebMaps("input map missing output_pubkey"))?,
++    )
++    .map_err(|_| Error::InvalidSecp256k1PublicKey(secp256k1::Error::InvalidPublicKey))?;
++    let input_public_key = match &inp.input_pubkey {
++        Some(b) => Some(
++            PublicKey::from_slice(b)
++                .map_err(|_| Error::InvalidSecp256k1PublicKey(secp256k1::Error::InvalidPublicKey))?,
++        ),
++        None => None,
++    };
++    let mut signature = [0u8; 64];
++    let sig = inp
++        .signature
++        .as_ref()
++        .ok_or(Error::IncompleteMwebMaps("input map missing signature"))?;
++    if sig.len() != 64 {
++        return Err(Error::IncompleteMwebMaps("input signature must be 64 bytes"));
++    }
++    signature.copy_from_slice(sig);
++    Ok(Input {
++        features,
++        output_id,
++        commitment,
++        input_public_key,
++        output_public_key,
++        extra_data: inp.extra_data.clone().unwrap_or_default(),
++        signature,
++    })
++}
++
++pub(crate) fn wire_output_from_map(out: &MwebOutput) -> Result<Output, Error> {
++    let commitment = out
++        .commit
++        .ok_or(Error::IncompleteMwebMaps("output map missing commit"))?;
++    let sender_public_key = PublicKey::from_slice(
++        out.sender_pubkey
++            .as_ref()
++            .ok_or(Error::IncompleteMwebMaps("output map missing sender_pubkey"))?,
++    )
++    .map_err(|_| Error::InvalidSecp256k1PublicKey(secp256k1::Error::InvalidPublicKey))?;
++    let receiver_public_key = PublicKey::from_slice(
++        out.output_pubkey
++            .as_ref()
++            .ok_or(Error::IncompleteMwebMaps("output map missing output_pubkey"))?,
++    )
++    .map_err(|_| Error::InvalidSecp256k1PublicKey(secp256k1::Error::InvalidPublicKey))?;
++    let features = out.features.unwrap_or(0);
++    let standard_fields = match &out.standard_fields {
++        Some(blob) if blob.len() >= 33 + 1 + 8 + 16 => {
++            let ke = PublicKey::from_slice(&blob[..33]).map_err(|_| {
++                Error::InvalidSecp256k1PublicKey(secp256k1::Error::InvalidPublicKey)
++            })?;
++            let view_tag = blob[33];
++            let masked_value = u64::from_le_bytes(blob[34..42].try_into().unwrap());
++            let mut masked_nonce = [0u8; 16];
++            masked_nonce.copy_from_slice(&blob[42..58]);
++            Some(OutputMessageStandardFields {
++                key_exchange_pubkey: ke,
++                view_tag,
++                masked_value,
++                masked_nonce,
++            })
++        }
++        _ => None,
++    };
++    let mut range_proof = [0u8; 675];
++    let rp = out
++        .range_proof
++        .as_ref()
++        .ok_or(Error::IncompleteMwebMaps("output map missing range_proof"))?;
++    if rp.len() != 675 {
++        return Err(Error::IncompleteMwebMaps("range_proof must be 675 bytes"));
++    }
++    range_proof.copy_from_slice(rp);
++    let mut signature = [0u8; 64];
++    let sig = out
++        .signature
++        .as_ref()
++        .ok_or(Error::IncompleteMwebMaps("output map missing signature"))?;
++    if sig.len() != 64 {
++        return Err(Error::IncompleteMwebMaps("output signature must be 64 bytes"));
++    }
++    signature.copy_from_slice(sig);
++    Ok(Output {
++        commitment,
++        sender_public_key,
++        receiver_public_key,
++        message: OutputMessage {
++            features,
++            standard_fields,
++            extra_data: out.extra_data.clone().unwrap_or_default(),
++        },
++        range_proof,
++        signature,
++    })
++}
++
++pub(crate) fn wire_kernel_from_map(k: &MwebKernel) -> Result<Kernel, Error> {
++    let excess = k
++        .excess_commit
++        .ok_or(Error::IncompleteMwebMaps("kernel map missing excess"))?;
++    let signature = k
++        .signature
++        .ok_or(Error::IncompleteMwebMaps("kernel map missing signature"))?;
++    let mut pegouts = Vec::with_capacity(k.pegouts.len());
++    for raw in &k.pegouts {
++        pegouts.push(crate::psbt::mweb::kernel::pegout_coin_from_psbt_value(raw)?);
++    }
++    let stealth_excess = match &k.stealth_commit {
++        Some(b) => Some(
++            PublicKey::from_slice(b)
++                .map_err(|_| Error::InvalidSecp256k1PublicKey(secp256k1::Error::InvalidPublicKey))?,
++        ),
++        None => None,
++    };
++    Ok(Kernel {
++        features: k.features.unwrap_or(0),
++        fee: k.fee.map(|f| f as i64),
++        pegin: k.pegin_amount.map(|a| a as i64),
++        pegouts,
++        lock_height: k.lock_height,
++        stealth_excess,
++        extra_data: k.extra_data.clone().unwrap_or_default(),
++        excess,
++        signature,
++    })
++}
+diff --git a/litecoin/src/psbt/mweb/input.rs b/litecoin/src/psbt/mweb/input.rs
+new file mode 100644
+index 0000000..921f595
+--- /dev/null
++++ b/litecoin/src/psbt/mweb/input.rs
+@@ -0,0 +1,268 @@
++// SPDX-License-Identifier: CC0-1.0
++
++use crate::bip32::KeySource;
++use crate::prelude::*;
++use crate::psbt::mweb::types::*;
++use crate::psbt::raw;
++use crate::psbt::serialize::{Deserialize as PsbtDeserialize, Serialize as PsbtSerialize};
++use crate::psbt::Error;
++
++/// MWEB fields for one PSBT input (ltcd `PInput` MWEB subset).
++#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
++#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
++#[cfg_attr(feature = "serde", serde(crate = "actual_serde"))]
++pub struct MwebInput {
++    /// Spent output id.
++    pub output_id: Option<[u8; 32]>,
++    /// Spent commitment (33 bytes).
++    #[cfg_attr(
++        feature = "serde",
++        serde(default, with = "crate::serde_utils::hex_array_opt::n33")
++    )]
++    pub commit: Option<[u8; 33]>,
++    /// Output pubkey.
++    pub output_pubkey: Option<Vec<u8>>,
++    /// Input pubkey.
++    pub input_pubkey: Option<Vec<u8>>,
++    /// Feature bits.
++    pub features: Option<u8>,
++    /// Input signature.
++    pub signature: Option<Vec<u8>>,
++    /// Address index.
++    pub address_index: Option<u32>,
++    /// Amount litoshis.
++    pub amount: Option<u64>,
++    /// Shared secret.
++    pub shared_secret: Option<[u8; 32]>,
++    /// Key exchange pubkey.
++    pub key_exchange_pubkey: Option<Vec<u8>>,
++    /// Master scan key origin (ltcd `MwebMasterScanKey`: pubkey key + BIP32 KeySource value).
++    pub master_scan_key_origin: Option<(secp256k1::PublicKey, KeySource)>,
++    /// Master spend key origin (ltcd `MwebMasterSpendKey`: pubkey key + BIP32 KeySource value).
++    pub master_spend_key_origin: Option<(secp256k1::PublicKey, KeySource)>,
++    /// Extra data.
++    pub extra_data: Option<Vec<u8>>,
++}
++
++impl MwebInput {
++    /// Encode as PSBT `(type, key_data, value)` triples.
++    ///
++    /// Most MWEB fields use empty `key_data`. Origins `0x9A`/`0x9B` use compressed pubkey
++    /// as key data and BIP174 KeySource bytes as value (ltcd `partial_input.go`).
++    pub fn to_kv_pairs(&self) -> Vec<(u8, Vec<u8>, Vec<u8>)> {
++        let mut pairs = Vec::new();
++        if let Some(id) = self.output_id {
++            pairs.push((MWEB_SPENT_OUTPUT_ID_TYPE, Vec::new(), id.to_vec()));
++        }
++        if let Some(c) = self.commit {
++            pairs.push((MWEB_SPENT_OUTPUT_COMMIT_TYPE, Vec::new(), c.to_vec()));
++        }
++        if let Some(ref p) = self.output_pubkey {
++            pairs.push((MWEB_SPENT_OUTPUT_PUBKEY_TYPE, Vec::new(), p.clone()));
++        }
++        if let Some(ref p) = self.input_pubkey {
++            pairs.push((MWEB_INPUT_PUBKEY_TYPE, Vec::new(), p.clone()));
++        }
++        if let Some(f) = self.features {
++            pairs.push((MWEB_INPUT_FEATURES_TYPE, Vec::new(), vec![f]));
++        }
++        if let Some(ref s) = self.signature {
++            pairs.push((MWEB_INPUT_SIGNATURE_TYPE, Vec::new(), s.clone()));
++        }
++        if let Some(i) = self.address_index {
++            pairs.push((MWEB_ADDRESS_INDEX_TYPE, Vec::new(), i.to_le_bytes().to_vec()));
++        }
++        if let Some(a) = self.amount {
++            pairs.push((MWEB_INPUT_AMOUNT_TYPE, Vec::new(), a.to_le_bytes().to_vec()));
++        }
++        if let Some(ss) = self.shared_secret {
++            pairs.push((MWEB_SHARED_SECRET_TYPE, Vec::new(), ss.to_vec()));
++        }
++        if let Some(ref p) = self.key_exchange_pubkey {
++            pairs.push((MWEB_KEY_EXCHANGE_PUBKEY_TYPE, Vec::new(), p.clone()));
++        }
++        if let Some((ref pk, ref ks)) = self.master_scan_key_origin {
++            pairs.push((
++                MWEB_MASTER_SCAN_KEY_ORIGIN_TYPE,
++                pk.serialize().to_vec(),
++                PsbtSerialize::serialize(ks),
++            ));
++        }
++        if let Some((ref pk, ref ks)) = self.master_spend_key_origin {
++            pairs.push((
++                MWEB_MASTER_SPEND_KEY_ORIGIN_TYPE,
++                pk.serialize().to_vec(),
++                PsbtSerialize::serialize(ks),
++            ));
++        }
++        if let Some(ref e) = self.extra_data {
++            pairs.push((MWEB_INPUT_EXTRA_DATA_TYPE, Vec::new(), e.clone()));
++        }
++        pairs
++    }
++
++    /// Encode as `(type, value)` with empty keys (legacy helper for non-origin fields).
++    ///
++    /// Origins are included only when their pubkey key-data is empty (never for valid
++    /// ltcd-shaped origins). Prefer [`Self::to_kv_pairs`].
++    pub fn to_pairs(&self) -> Vec<(u8, Vec<u8>)> {
++        self.to_kv_pairs()
++            .into_iter()
++            .filter(|(_, key, _)| key.is_empty())
++            .map(|(ty, _, val)| (ty, val))
++            .collect()
++    }
++
++    /// Apply one typed field from wire `(field_ty, key_data, value)`.
++    pub fn apply_kv_field(&mut self, field_ty: u8, key_data: &[u8], value: &[u8]) {
++        match field_ty {
++            MWEB_SPENT_OUTPUT_ID_TYPE if key_data.is_empty() && value.len() == 32 => {
++                let mut id = [0u8; 32];
++                id.copy_from_slice(value);
++                self.output_id = Some(id);
++            }
++            MWEB_SPENT_OUTPUT_COMMIT_TYPE if key_data.is_empty() && value.len() == 33 => {
++                let mut c = [0u8; 33];
++                c.copy_from_slice(value);
++                self.commit = Some(c);
++            }
++            MWEB_SPENT_OUTPUT_PUBKEY_TYPE if key_data.is_empty() => {
++                self.output_pubkey = Some(value.to_vec())
++            }
++            MWEB_INPUT_PUBKEY_TYPE if key_data.is_empty() => {
++                self.input_pubkey = Some(value.to_vec())
++            }
++            MWEB_INPUT_FEATURES_TYPE if key_data.is_empty() && !value.is_empty() => {
++                self.features = Some(value[0])
++            }
++            MWEB_INPUT_SIGNATURE_TYPE if key_data.is_empty() => {
++                self.signature = Some(value.to_vec())
++            }
++            MWEB_ADDRESS_INDEX_TYPE if key_data.is_empty() && value.len() == 4 => {
++                self.address_index = Some(u32::from_le_bytes(value[..4].try_into().unwrap()));
++            }
++            MWEB_INPUT_AMOUNT_TYPE if key_data.is_empty() && value.len() == 8 => {
++                self.amount = Some(u64::from_le_bytes(value[..8].try_into().unwrap()));
++            }
++            MWEB_SHARED_SECRET_TYPE if key_data.is_empty() && value.len() == 32 => {
++                let mut ss = [0u8; 32];
++                ss.copy_from_slice(value);
++                self.shared_secret = Some(ss);
++            }
++            MWEB_KEY_EXCHANGE_PUBKEY_TYPE if key_data.is_empty() => {
++                self.key_exchange_pubkey = Some(value.to_vec())
++            }
++            MWEB_MASTER_SCAN_KEY_ORIGIN_TYPE => {
++                if let Ok(pk) = secp256k1::PublicKey::from_slice(key_data) {
++                    if let Ok(ks) = <KeySource as PsbtDeserialize>::deserialize(value) {
++                        self.master_scan_key_origin = Some((pk, ks));
++                    }
++                }
++            }
++            MWEB_MASTER_SPEND_KEY_ORIGIN_TYPE => {
++                if let Ok(pk) = secp256k1::PublicKey::from_slice(key_data) {
++                    if let Ok(ks) = <KeySource as PsbtDeserialize>::deserialize(value) {
++                        self.master_spend_key_origin = Some((pk, ks));
++                    }
++                }
++            }
++            MWEB_INPUT_EXTRA_DATA_TYPE if key_data.is_empty() => {
++                self.extra_data = Some(value.to_vec())
++            }
++            _ => {}
++        }
++    }
++
++    /// Apply one typed field with empty key data (non-origin fields).
++    pub fn apply_field(&mut self, field_ty: u8, value: &[u8]) {
++        self.apply_kv_field(field_ty, &[], value);
++    }
++
++    /// Build from an iterator of `(field_ty, value)` pairs (empty keys).
++    pub fn from_pairs(pairs: impl IntoIterator<Item = (u8, Vec<u8>)>) -> Self {
++        let mut out = Self::default();
++        for (ty, val) in pairs {
++            out.apply_field(ty, &val);
++        }
++        out
++    }
++
++    /// Build from `(field_ty, key_data, value)` triples.
++    pub fn from_kv_pairs(pairs: impl IntoIterator<Item = (u8, Vec<u8>, Vec<u8>)>) -> Self {
++        let mut out = Self::default();
++        for (ty, key, val) in pairs {
++            out.apply_kv_field(ty, &key, &val);
++        }
++        out
++    }
++
++    /// Parse from a PSBT input `unknown` map (MWEB `0x90+` keys).
++    pub fn from_unknown_map(unknown: &BTreeMap<raw::Key, Vec<u8>>) -> Self {
++        let mut out = Self::default();
++        for (k, v) in unknown {
++            if (MWEB_INPUT_FIELD_MIN..=MWEB_INPUT_FIELD_MAX).contains(&k.type_value) {
++                out.apply_kv_field(k.type_value, &k.key, v);
++            }
++        }
++        out
++    }
++
++    /// Merge `other` into `self`, keeping existing values when set (BIP-174 combine semantics).
++    pub fn combine(&mut self, other: Self) {
++        if self.output_id.is_none() {
++            self.output_id = other.output_id;
++        }
++        if self.commit.is_none() {
++            self.commit = other.commit;
++        }
++        if self.output_pubkey.is_none() {
++            self.output_pubkey = other.output_pubkey;
++        }
++        if self.input_pubkey.is_none() {
++            self.input_pubkey = other.input_pubkey;
++        }
++        if self.features.is_none() {
++            self.features = other.features;
++        }
++        if self.signature.is_none() {
++            self.signature = other.signature;
++        }
++        if self.address_index.is_none() {
++            self.address_index = other.address_index;
++        }
++        if self.amount.is_none() {
++            self.amount = other.amount;
++        }
++        if self.shared_secret.is_none() {
++            self.shared_secret = other.shared_secret;
++        }
++        if self.key_exchange_pubkey.is_none() {
++            self.key_exchange_pubkey = other.key_exchange_pubkey;
++        }
++        if self.master_scan_key_origin.is_none() {
++            self.master_scan_key_origin = other.master_scan_key_origin;
++        }
++        if self.master_spend_key_origin.is_none() {
++            self.master_spend_key_origin = other.master_spend_key_origin;
++        }
++        if self.extra_data.is_none() {
++            self.extra_data = other.extra_data;
++        }
++    }
++
++    /// Validate that origin fields are either all absent or fully populated (ltcwallet shape).
++    pub fn validate_key_origins(&self) -> Result<(), Error> {
++        let has_scan = self.master_scan_key_origin.is_some();
++        let has_spend = self.master_spend_key_origin.is_some();
++        let has_idx = self.address_index.is_some();
++        if has_scan && has_spend && has_idx {
++            return Ok(());
++        }
++        if !has_scan && !has_spend && !has_idx {
++            return Ok(());
++        }
++        Err(Error::IncompleteMwebMaps(
++            "incomplete MWEB key origins (need scan, spend, and address index)",
++        ))
++    }
++}
+diff --git a/litecoin/src/psbt/mweb/kernel.rs b/litecoin/src/psbt/mweb/kernel.rs
+new file mode 100644
+index 0000000..8b9485b
+--- /dev/null
++++ b/litecoin/src/psbt/mweb/kernel.rs
+@@ -0,0 +1,265 @@
++// SPDX-License-Identifier: CC0-1.0
++
++use io::Cursor;
++
++use crate::consensus::encode::{self, deserialize, serialize, Decodable};
++use crate::prelude::*;
++use crate::psbt::mweb::types::*;
++use crate::psbt::raw;
++use crate::psbt::{serialize as psbt_ser, Error};
++
++/// One MWEB kernel PSBT map (ltcd `PKernel`).
++#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
++#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
++#[cfg_attr(feature = "serde", serde(crate = "actual_serde"))]
++pub struct MwebKernel {
++    /// Excess commitment.
++    #[cfg_attr(
++        feature = "serde",
++        serde(default, with = "crate::serde_utils::hex_array_opt::n33")
++    )]
++    pub excess_commit: Option<[u8; 33]>,
++    /// Stealth excess (33-byte compressed pubkey).
++    pub stealth_commit: Option<Vec<u8>>,
++    /// Fee (litoshis).
++    pub fee: Option<u64>,
++    /// Peg-in amount.
++    pub pegin_amount: Option<u64>,
++    /// Peg-out PSBT values (ltcd: repeated type-`4` KVs; each value is TxOut wire:
++    /// 8-byte LE amount || script).
++    pub pegouts: Vec<Vec<u8>>,
++    /// Lock height.
++    pub lock_height: Option<u32>,
++    /// Features.
++    pub features: Option<u8>,
++    /// Extra data.
++    pub extra_data: Option<Vec<u8>>,
++    /// Signature (64 bytes).
++    #[cfg_attr(
++        feature = "serde",
++        serde(default, with = "crate::serde_utils::hex_array_opt::n64")
++    )]
++    pub signature: Option<[u8; 64]>,
++    /// Unknown / proprietary pairs preserved for ltcd map round-trips
++    /// (`key` = type byte || keydata).
++    pub unknowns: Vec<(Vec<u8>, Vec<u8>)>,
++}
++
++impl MwebKernel {
++    /// Encode kernel map as typed `(field_ty, key_suffix, value)` pairs.
++    ///
++    /// Peg-outs use `key_suffix = [pegout_index]` (ltcd-shaped). Other fields use an empty
++    /// suffix.
++    pub fn to_kv_pairs(&self) -> Vec<(u8, Vec<u8>, Vec<u8>)> {
++        let mut pairs = Vec::new();
++        if let Some(c) = self.excess_commit {
++            pairs.push((MWEB_KERNEL_EXCESS_COMMIT_TYPE, Vec::new(), c.to_vec()));
++        }
++        if let Some(ref c) = self.stealth_commit {
++            pairs.push((MWEB_KERNEL_STEALTH_COMMIT_TYPE, Vec::new(), c.clone()));
++        }
++        if let Some(f) = self.fee {
++            pairs.push((MWEB_KERNEL_FEE_TYPE, Vec::new(), f.to_le_bytes().to_vec()));
++        }
++        if let Some(a) = self.pegin_amount {
++            pairs.push((
++                MWEB_KERNEL_PEGIN_AMOUNT_TYPE,
++                Vec::new(),
++                a.to_le_bytes().to_vec(),
++            ));
++        }
++        for (i, p) in self.pegouts.iter().enumerate() {
++            pairs.push((MWEB_KERNEL_PEGOUT_TYPE, vec![i as u8], p.clone()));
++        }
++        if let Some(h) = self.lock_height {
++            pairs.push((
++                MWEB_KERNEL_LOCK_HEIGHT_TYPE,
++                Vec::new(),
++                h.to_le_bytes().to_vec(),
++            ));
++        }
++        if let Some(f) = self.features {
++            pairs.push((MWEB_KERNEL_FEATURES_TYPE, Vec::new(), vec![f]));
++        }
++        if let Some(ref e) = self.extra_data {
++            pairs.push((MWEB_KERNEL_EXTRA_DATA_TYPE, Vec::new(), e.clone()));
++        }
++        if let Some(s) = self.signature {
++            pairs.push((MWEB_KERNEL_SIGNATURE_TYPE, Vec::new(), s.to_vec()));
++        }
++        pairs
++    }
++
++    /// Encode as `(field_ty, value)` pairs (peg-out index is not preserved; use
++    /// [`Self::to_kv_pairs`] for full fidelity).
++    pub fn to_pairs(&self) -> Vec<(u8, Vec<u8>)> {
++        self.to_kv_pairs()
++            .into_iter()
++            .map(|(ty, _, val)| (ty, val))
++            .collect()
++    }
++
++    /// Apply one kernel field from wire `(field_ty, key_data, value)`.
++    ///
++    /// For peg-outs, `key_data` is the pegout index (ltcd); empty `key_data` appends.
++    pub fn apply_field(&mut self, field_ty: u8, key_data: &[u8], value: &[u8]) {
++        match field_ty {
++            MWEB_KERNEL_EXCESS_COMMIT_TYPE if value.len() == 33 => {
++                let mut c = [0u8; 33];
++                c.copy_from_slice(value);
++                self.excess_commit = Some(c);
++            }
++            MWEB_KERNEL_STEALTH_COMMIT_TYPE => self.stealth_commit = Some(value.to_vec()),
++            MWEB_KERNEL_FEE_TYPE if value.len() == 8 => {
++                self.fee = Some(u64::from_le_bytes(value[..8].try_into().unwrap()));
++            }
++            MWEB_KERNEL_PEGIN_AMOUNT_TYPE if value.len() == 8 => {
++                self.pegin_amount = Some(u64::from_le_bytes(value[..8].try_into().unwrap()));
++            }
++            MWEB_KERNEL_PEGOUT_TYPE => {
++                let idx = if key_data.is_empty() {
++                    self.pegouts.len()
++                } else {
++                    key_data[0] as usize
++                };
++                while self.pegouts.len() <= idx {
++                    self.pegouts.push(Vec::new());
++                }
++                self.pegouts[idx] = value.to_vec();
++            }
++            MWEB_KERNEL_LOCK_HEIGHT_TYPE if value.len() == 4 => {
++                self.lock_height = Some(u32::from_le_bytes(value[..4].try_into().unwrap()));
++            }
++            MWEB_KERNEL_FEATURES_TYPE if !value.is_empty() => self.features = Some(value[0]),
++            MWEB_KERNEL_EXTRA_DATA_TYPE => self.extra_data = Some(value.to_vec()),
++            MWEB_KERNEL_SIGNATURE_TYPE if value.len() == 64 => {
++                let mut s = [0u8; 64];
++                s.copy_from_slice(value);
++                self.signature = Some(s);
++            }
++            _ => {}
++        }
++    }
++
++    /// Build from an iterator of `(field_ty, value)` pairs (peg-outs append in order).
++    pub fn from_pairs(pairs: impl IntoIterator<Item = (u8, Vec<u8>)>) -> Self {
++        let mut out = Self::default();
++        for (ty, val) in pairs {
++            out.apply_field(ty, &[], &val);
++        }
++        out
++    }
++
++    /// Merge `other` into `self`, keeping existing values when set.
++    pub fn combine(&mut self, other: Self) {
++        if self.excess_commit.is_none() {
++            self.excess_commit = other.excess_commit;
++        }
++        if self.stealth_commit.is_none() {
++            self.stealth_commit = other.stealth_commit;
++        }
++        if self.fee.is_none() {
++            self.fee = other.fee;
++        }
++        if self.pegin_amount.is_none() {
++            self.pegin_amount = other.pegin_amount;
++        }
++        if self.pegouts.is_empty() {
++            self.pegouts = other.pegouts;
++        }
++        if self.lock_height.is_none() {
++            self.lock_height = other.lock_height;
++        }
++        if self.features.is_none() {
++            self.features = other.features;
++        }
++        if self.extra_data.is_none() {
++            self.extra_data = other.extra_data;
++        }
++        if self.signature.is_none() {
++            self.signature = other.signature;
++        }
++        if self.unknowns.is_empty() {
++            self.unknowns = other.unknowns;
++        }
++    }
++
++    /// Deserialize an ltcd-style standalone kernel PSBT map (pairs + `0x00` separator).
++    pub fn deserialize_ltcd_map(data: &[u8]) -> Result<Self, Error> {
++        let mut decoder = Cursor::new(data);
++        let mut out = Self::default();
++        loop {
++            match raw::Pair::decode(&mut decoder) {
++                Ok(pair) => {
++                    if pair.key.type_value <= MWEB_KERNEL_SIGNATURE_TYPE {
++                        out.apply_field(pair.key.type_value, &pair.key.key, &pair.value);
++                    } else {
++                        let mut full_key = vec![pair.key.type_value];
++                        full_key.extend_from_slice(&pair.key.key);
++                        out.unknowns.push((full_key, pair.value));
++                    }
++                }
++                Err(Error::NoMorePairs) => break,
++                Err(e) => return Err(e),
++            }
++        }
++        Ok(out)
++    }
++
++    /// Serialize as an ltcd-style standalone kernel PSBT map (pairs + `0x00` separator).
++    pub fn serialize_ltcd_map(&self) -> Vec<u8> {
++        let mut buf = Vec::new();
++        for (field_ty, key_suffix, value) in self.to_kv_pairs() {
++            let pair = raw::Pair {
++                key: raw::Key {
++                    type_value: field_ty,
++                    key: key_suffix,
++                },
++                value,
++            };
++            buf.extend(psbt_ser::Serialize::serialize(&pair));
++        }
++        for (full_key, value) in &self.unknowns {
++            if full_key.is_empty() {
++                continue;
++            }
++            let pair = raw::Pair {
++                key: raw::Key {
++                    type_value: full_key[0],
++                    key: full_key[1..].to_vec(),
++                },
++                value: value.clone(),
++            };
++            buf.extend(psbt_ser::Serialize::serialize(&pair));
++        }
++        buf.push(0x00); // map separator
++        buf
++    }
++}
++
++/// Decode one PSBT peg-out value (ltcd TxOut wire: 8-byte LE amount || script).
++pub fn pegout_coin_from_psbt_value(raw: &[u8]) -> Result<crate::blockdata::mimblewimble::PegOutCoin, Error> {
++    if raw.len() < 8 {
++        return Err(Error::IncompleteMwebMaps("kernel pegout value too short"));
++    }
++    let amount = i64::from_le_bytes(raw[..8].try_into().unwrap());
++    let script_pub_key = deserialize(&raw[8..]).map_err(Error::ConsensusEncoding)?;
++    Ok(crate::blockdata::mimblewimble::PegOutCoin {
++        amount,
++        script_pub_key,
++    })
++}
++
++/// Encode one [`PegOutCoin`](crate::blockdata::mimblewimble::PegOutCoin) as a PSBT peg-out value.
++pub fn pegout_psbt_value(coin: &crate::blockdata::mimblewimble::PegOutCoin) -> Vec<u8> {
++    let mut v = (coin.amount as u64).to_le_bytes().to_vec();
++    v.extend(serialize(&coin.script_pub_key));
++    v
++}
++
++// Silence unused-import warning when serde is off and encode helpers are only used above.
++#[allow(dead_code)]
++fn _encode_unused_guard() -> Result<(), encode::Error> {
++    let _: u8 = Decodable::consensus_decode(&mut Cursor::new([0u8].as_slice()))?;
++    Ok(())
++}
+diff --git a/litecoin/src/psbt/mweb/mod.rs b/litecoin/src/psbt/mweb/mod.rs
+new file mode 100644
+index 0000000..36d234f
+--- /dev/null
++++ b/litecoin/src/psbt/mweb/mod.rs
+@@ -0,0 +1,308 @@
++// SPDX-License-Identifier: CC0-1.0
++
++//! ltcsuite-compatible PSBT MWEB key types and maps.
++//!
++//! Key codes match [`ltcsuite/ltcd` `ltcutil/psbt/types.go`](https://github.com/ltcsuite/ltcd/blob/master/ltcutil/psbt/types.go)
++//! (first-class `0x90+` types — not BIP174 `0xFC` proprietary blobs).
++//!
++//! Global kernel fields use `type_value = 0x93` with key
++//! `[kernel_index: u32 LE][field_ty: u8][optional pegout_index]`.
++//! Parallel pure-MWEB input/output maps (when `unsigned_tx` has no matching vin/vout slots) use
++//! global keys: input fields as `type_value = field` with 4-byte index key; output fields as
++//! `type_value = 0x94` with 5-byte `[index][field_ty]` key.
++
++mod extract;
++mod input;
++mod kernel;
++mod output;
++pub mod types;
++
++pub use self::extract::assemble_mw_tx;
++pub use self::input::MwebInput;
++pub use self::kernel::{pegout_coin_from_psbt_value, pegout_psbt_value, MwebKernel};
++pub use self::output::MwebOutput;
++pub use self::types::*;
++
++pub(crate) fn ensure_index<T: Default>(vec: &mut Vec<T>, index: usize) {
++    while vec.len() <= index {
++        vec.push(T::default());
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::prelude::BTreeMap;
++    use crate::psbt::raw;
++    use secp256k1::{Secp256k1, SecretKey};
++
++    fn test_pubkey(seed: u8) -> Vec<u8> {
++        let sk = SecretKey::from_slice(&[seed; 32]).expect("valid secret");
++        sk.public_key(&Secp256k1::new()).serialize().to_vec()
++    }
++
++    #[test]
++    fn type_codes_match_ltcd() {
++        assert_eq!(MWEB_TX_OFFSET_TYPE, 0x90);
++        assert_eq!(MWEB_TX_STEALTH_OFFSET_TYPE, 0x91);
++        assert_eq!(MWEB_KERNEL_COUNT_TYPE, 0x92);
++        assert_eq!(MWEB_GLOBAL_KERNEL_FIELD_TYPE, 0x93);
++        assert_eq!(MWEB_GLOBAL_OUTPUT_FIELD_TYPE, 0x94);
++        assert_eq!(MWEB_SPENT_OUTPUT_ID_TYPE, 0x90);
++        assert_eq!(MWEB_STEALTH_ADDRESS_OUTPUT_TYPE, 0x90);
++        assert_eq!(MWEB_KERNEL_EXCESS_COMMIT_TYPE, 0);
++        assert_eq!(MWEB_KERNEL_SIGNATURE_TYPE, 8);
++    }
++
++    #[test]
++    fn mweb_input_roundtrip_pairs() {
++        let inp = MwebInput {
++            output_id: Some([9u8; 32]),
++            commit: Some({
++                let mut c = [0u8; 33];
++                c[0] = 2;
++                c
++            }),
++            amount: Some(50_000),
++            address_index: Some(2),
++            features: Some(1),
++            ..MwebInput::default()
++        };
++        let back = MwebInput::from_kv_pairs(inp.to_kv_pairs());
++        assert_eq!(back.output_id, inp.output_id);
++        assert_eq!(back.commit, inp.commit);
++        assert_eq!(back.amount, inp.amount);
++        assert_eq!(back.address_index, inp.address_index);
++        assert_eq!(back.features, inp.features);
++    }
++
++    #[test]
++    fn mweb_input_key_origin_ltcd_wire() {
++        use crate::bip32::{ChildNumber, DerivationPath, Fingerprint};
++        use crate::psbt::serialize::{Deserialize, Serialize};
++
++        let sk = SecretKey::from_slice(&[7u8; 32]).unwrap();
++        let pk = sk.public_key(&Secp256k1::new());
++        let fingerprint = Fingerprint::from([0x11, 0x22, 0x33, 0x44]);
++        let path: DerivationPath = vec![
++            ChildNumber::from_hardened_idx(0).unwrap(),
++            ChildNumber::from_hardened_idx(100).unwrap(),
++            ChildNumber::from_hardened_idx(0).unwrap(),
++        ]
++        .into();
++        let ks = (fingerprint, path);
++
++        let inp = MwebInput {
++            address_index: Some(3),
++            master_scan_key_origin: Some((pk, ks.clone())),
++            master_spend_key_origin: Some((pk, {
++                let spend_path: DerivationPath = vec![
++                    ChildNumber::from_hardened_idx(0).unwrap(),
++                    ChildNumber::from_hardened_idx(100).unwrap(),
++                    ChildNumber::from_hardened_idx(1).unwrap(),
++                ]
++                .into();
++                (fingerprint, spend_path)
++            })),
++            ..MwebInput::default()
++        };
++        inp.validate_key_origins().unwrap();
++
++        let pairs = inp.to_kv_pairs();
++        let scan = pairs
++            .iter()
++            .find(|(ty, _, _)| *ty == MWEB_MASTER_SCAN_KEY_ORIGIN_TYPE)
++            .unwrap();
++        assert_eq!(scan.1, pk.serialize().to_vec());
++        // Value is BIP174 KeySource: fingerprint || LE child indexes
++        assert_eq!(scan.2, ks.serialize());
++        assert_eq!(
++            <(Fingerprint, DerivationPath) as Deserialize>::deserialize(&scan.2).unwrap(),
++            ks
++        );
++
++        let back = MwebInput::from_kv_pairs(inp.to_kv_pairs());
++        assert_eq!(back.master_scan_key_origin, inp.master_scan_key_origin);
++        assert_eq!(back.master_spend_key_origin, inp.master_spend_key_origin);
++        assert_eq!(back.address_index, Some(3));
++    }
++
++    #[test]
++    fn type_codes_match_ltcd_origins() {
++        assert_eq!(MWEB_MASTER_SCAN_KEY_ORIGIN_TYPE, 0x9A);
++        assert_eq!(MWEB_MASTER_SPEND_KEY_ORIGIN_TYPE, 0x9B);
++        assert_eq!(MWEB_INPUT_EXTRA_DATA_TYPE, 0x9C);
++    }
++
++    #[test]
++    fn mweb_input_from_unknown_map() {
++        let mut unknown = BTreeMap::new();
++        unknown.insert(
++            raw::Key {
++                type_value: MWEB_SPENT_OUTPUT_ID_TYPE,
++                key: Vec::new(),
++            },
++            [7u8; 32].to_vec(),
++        );
++        let inp = MwebInput::from_unknown_map(&unknown);
++        assert_eq!(inp.output_id, Some([7u8; 32]));
++    }
++
++    #[test]
++    fn assemble_minimal_mw_tx() {
++        let mut commit = [0u8; 33];
++        commit[0] = 2;
++        let mut excess = [0u8; 33];
++        excess[0] = 2;
++        excess[1] = 1;
++
++        let inp = MwebInput {
++            output_id: Some([1u8; 32]),
++            commit: Some(commit),
++            output_pubkey: Some(test_pubkey(3)),
++            signature: Some(vec![0u8; 64]),
++            ..MwebInput::default()
++        };
++        let out = MwebOutput {
++            commit: Some(commit),
++            sender_pubkey: Some(test_pubkey(4)),
++            output_pubkey: Some(test_pubkey(5)),
++            range_proof: Some(vec![0u8; 675]),
++            signature: Some(vec![0u8; 64]),
++            ..MwebOutput::default()
++        };
++        let kernel = MwebKernel {
++            excess_commit: Some(excess),
++            fee: Some(1000),
++            features: Some(0),
++            signature: Some([0u8; 64]),
++            ..MwebKernel::default()
++        };
++
++        let mw = assemble_mw_tx([2u8; 32], [3u8; 32], &[inp], &[out], &[kernel]).unwrap();
++        assert_eq!(mw.kernel_offset, [2u8; 32]);
++        assert_eq!(mw.stealth_offset, [3u8; 32]);
++        assert_eq!(mw.body.inputs.len(), 1);
++        assert_eq!(mw.body.outputs.len(), 1);
++        assert_eq!(mw.body.kernels.len(), 1);
++        assert_eq!(mw.body.kernels[0].fee, Some(1000));
++    }
++
++    /// Port of ltcd `TestAllKernelFieldsPopulated` (`partial_kernel_test.go`).
++    #[test]
++    fn mweb_kernel_all_fields_populated_ltcd_golden() {
++        use hex::{test_hex_unwrap as hex, DisplayHex};
++
++        let all_fields_populated = hex!(
++            "010021093d957d9c2a301532ffc9c11344e87ad252eccbac597bac6567ba38a2365bea14\
++             010121022a969b0465d5e8a24fc0659710925b534e82e81f7677a3012bb8d550dcff9f1c\
++             0102081027000000000000010308204e000000000000\
++             0204000fa0860100000000000676a9142088ac\
++             0204010f80841e00000000000676a9142088ac\
++             010504960000000106013f01070a65787472612064617461\
++             010840e12804f0a96165fbabeda93782cc0b79e92faab448d72e728dfba7fa82771f0f\
++             8195c80e5b8754f01cdf53fca8fe9820b15074d4ae5cfb01b5307c64c51f62cf\
++             03fc00010b70726f707269657461727900"
++        );
++
++        let pk = MwebKernel::deserialize_ltcd_map(&all_fields_populated).unwrap();
++
++        let expected_excess = hex!(
++            "093d957d9c2a301532ffc9c11344e87ad252eccbac597bac6567ba38a2365bea14"
++        );
++        assert_eq!(pk.excess_commit.as_ref().unwrap().as_slice(), expected_excess.as_slice());
++
++        let expected_stealth = hex!(
++            "022a969b0465d5e8a24fc0659710925b534e82e81f7677a3012bb8d550dcff9f1c"
++        );
++        assert_eq!(pk.stealth_commit.as_ref().unwrap().as_slice(), expected_stealth.as_slice());
++
++        assert_eq!(pk.fee, Some(10_000));
++        assert_eq!(pk.pegin_amount, Some(20_000));
++        assert_eq!(pk.pegouts.len(), 2);
++
++        let peg0 = pegout_coin_from_psbt_value(&pk.pegouts[0]).unwrap();
++        assert_eq!(peg0.amount, 100_000);
++        assert_eq!(peg0.script_pub_key.as_bytes(), hex!("76a9142088ac").as_slice());
++
++        let peg1 = pegout_coin_from_psbt_value(&pk.pegouts[1]).unwrap();
++        assert_eq!(peg1.amount, 2_000_000);
++        assert_eq!(peg1.script_pub_key.as_bytes(), hex!("76a9142088ac").as_slice());
++
++        assert_eq!(pk.lock_height, Some(150));
++        assert_eq!(pk.features, Some(0x3f)); // MwebKernelAllFeatureBits
++        assert_eq!(pk.extra_data.as_ref().unwrap(), &b"extra data"[..]);
++
++        let expected_sig = hex!(
++            "e12804f0a96165fbabeda93782cc0b79e92faab448d72e728dfba7fa82771f0f\
++             8195c80e5b8754f01cdf53fca8fe9820b15074d4ae5cfb01b5307c64c51f62cf"
++        );
++        assert_eq!(pk.signature.as_ref().unwrap().as_slice(), expected_sig.as_slice());
++
++        assert_eq!(pk.unknowns.len(), 1);
++        assert_eq!(pk.unknowns[0].0.as_slice(), hex!("fc0001").as_slice());
++        assert_eq!(pk.unknowns[0].1, b"proprietary");
++
++        let roundtrip = pk.serialize_ltcd_map();
++        assert_eq!(
++            roundtrip.as_hex().to_string(),
++            all_fields_populated.as_hex().to_string()
++        );
++    }
++
++    /// §10.6a: finalized MWEB output must keep stealth address through ser/de.
++    #[test]
++    fn finalized_mweb_output_stealth_address_survives() {
++        let scan = test_pubkey(0x21);
++        let spend = test_pubkey(0x22);
++        let mut stealth = Vec::new();
++        stealth.extend_from_slice(&scan);
++        stealth.extend_from_slice(&spend);
++
++        let mut commit = [0u8; 33];
++        commit[0] = 2;
++        commit[1] = 0xab;
++
++        let mut standard = Vec::new();
++        standard.extend_from_slice(&test_pubkey(0x30)); // Ke
++        standard.push(0x12); // view tag
++        standard.extend_from_slice(&0xdeadbeefu64.to_le_bytes());
++        standard.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
++
++        let out = MwebOutput {
++            stealth_address: Some(stealth.clone()),
++            commit: Some(commit),
++            features: Some(1), // standard fields bit
++            sender_pubkey: Some(test_pubkey(0x40)),
++            output_pubkey: Some(test_pubkey(0x41)),
++            standard_fields: Some(standard),
++            range_proof: Some(vec![0u8; 64]),
++            signature: Some(vec![0x55; 64]),
++            ..MwebOutput::default()
++        };
++
++        let back = MwebOutput::from_pairs(out.to_pairs());
++        assert!(back.signature.is_some());
++        assert_eq!(back.stealth_address.as_ref().unwrap(), &stealth);
++        assert_eq!(&back.stealth_address.as_ref().unwrap()[..33], &scan[..]);
++        assert_eq!(&back.stealth_address.as_ref().unwrap()[33..], &spend[..]);
++    }
++
++    /// Unsigned MWEB output stealth address still round-trips.
++    #[test]
++    fn unsigned_mweb_output_stealth_address_survives() {
++        let scan = test_pubkey(0x51);
++        let spend = test_pubkey(0x52);
++        let mut stealth = Vec::new();
++        stealth.extend_from_slice(&scan);
++        stealth.extend_from_slice(&spend);
++
++        let out = MwebOutput {
++            stealth_address: Some(stealth.clone()),
++            ..MwebOutput::default()
++        };
++        let back = MwebOutput::from_pairs(out.to_pairs());
++        assert!(back.signature.is_none());
++        assert_eq!(back.stealth_address.as_ref().unwrap(), &stealth);
++    }
++}
+diff --git a/litecoin/src/psbt/mweb/output.rs b/litecoin/src/psbt/mweb/output.rs
+new file mode 100644
+index 0000000..dc2a0cf
+--- /dev/null
++++ b/litecoin/src/psbt/mweb/output.rs
+@@ -0,0 +1,143 @@
++// SPDX-License-Identifier: CC0-1.0
++
++use crate::prelude::*;
++use crate::psbt::raw;
++use crate::psbt::mweb::types::*;
++
++/// MWEB fields for one PSBT output.
++#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
++#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
++#[cfg_attr(feature = "serde", serde(crate = "actual_serde"))]
++pub struct MwebOutput {
++    /// Stealth address bytes (66 bytes: scan pubkey || spend pubkey).
++    pub stealth_address: Option<Vec<u8>>,
++    /// Commitment.
++    #[cfg_attr(
++        feature = "serde",
++        serde(default, with = "crate::serde_utils::hex_array_opt::n33")
++    )]
++    pub commit: Option<[u8; 33]>,
++    /// Features.
++    pub features: Option<u8>,
++    /// Sender pubkey.
++    pub sender_pubkey: Option<Vec<u8>>,
++    /// Output pubkey.
++    pub output_pubkey: Option<Vec<u8>>,
++    /// Standard fields blob.
++    pub standard_fields: Option<Vec<u8>>,
++    /// Range proof.
++    pub range_proof: Option<Vec<u8>>,
++    /// Signature.
++    pub signature: Option<Vec<u8>>,
++    /// Extra data.
++    pub extra_data: Option<Vec<u8>>,
++}
++
++impl MwebOutput {
++    /// Encode as PSBT key-value pairs (`0x90+`, empty key).
++    pub fn to_pairs(&self) -> Vec<(u8, Vec<u8>)> {
++        let mut pairs = Vec::new();
++        if let Some(ref a) = self.stealth_address {
++            pairs.push((MWEB_STEALTH_ADDRESS_OUTPUT_TYPE, a.clone()));
++        }
++        if let Some(c) = self.commit {
++            pairs.push((MWEB_COMMIT_OUTPUT_TYPE, c.to_vec()));
++        }
++        if let Some(f) = self.features {
++            pairs.push((MWEB_FEATURES_OUTPUT_TYPE, vec![f]));
++        }
++        if let Some(ref p) = self.sender_pubkey {
++            pairs.push((MWEB_SENDER_PUBKEY_OUTPUT_TYPE, p.clone()));
++        }
++        if let Some(ref p) = self.output_pubkey {
++            pairs.push((MWEB_OUTPUT_PUBKEY_OUTPUT_TYPE, p.clone()));
++        }
++        if let Some(ref s) = self.standard_fields {
++            pairs.push((MWEB_STANDARD_FIELDS_OUTPUT_TYPE, s.clone()));
++        }
++        if let Some(ref r) = self.range_proof {
++            pairs.push((MWEB_RANGE_PROOF_OUTPUT_TYPE, r.clone()));
++        }
++        if let Some(ref s) = self.signature {
++            pairs.push((MWEB_SIGNATURE_OUTPUT_TYPE, s.clone()));
++        }
++        if let Some(ref e) = self.extra_data {
++            pairs.push((MWEB_EXTRA_DATA_OUTPUT_TYPE, e.clone()));
++        }
++        pairs
++    }
++
++    /// Apply one typed output field.
++    pub fn apply_field(&mut self, field_ty: u8, value: &[u8]) {
++        match field_ty {
++            MWEB_STEALTH_ADDRESS_OUTPUT_TYPE => self.stealth_address = Some(value.to_vec()),
++            MWEB_COMMIT_OUTPUT_TYPE if value.len() == 33 => {
++                let mut c = [0u8; 33];
++                c.copy_from_slice(value);
++                self.commit = Some(c);
++            }
++            MWEB_FEATURES_OUTPUT_TYPE if !value.is_empty() => self.features = Some(value[0]),
++            MWEB_SENDER_PUBKEY_OUTPUT_TYPE => self.sender_pubkey = Some(value.to_vec()),
++            MWEB_OUTPUT_PUBKEY_OUTPUT_TYPE => self.output_pubkey = Some(value.to_vec()),
++            MWEB_STANDARD_FIELDS_OUTPUT_TYPE => self.standard_fields = Some(value.to_vec()),
++            MWEB_RANGE_PROOF_OUTPUT_TYPE => self.range_proof = Some(value.to_vec()),
++            MWEB_SIGNATURE_OUTPUT_TYPE => self.signature = Some(value.to_vec()),
++            MWEB_EXTRA_DATA_OUTPUT_TYPE => self.extra_data = Some(value.to_vec()),
++            _ => {}
++        }
++    }
++
++    /// Build from an iterator of `(field_ty, value)` pairs.
++    pub fn from_pairs(pairs: impl IntoIterator<Item = (u8, Vec<u8>)>) -> Self {
++        let mut out = Self::default();
++        for (ty, val) in pairs {
++            out.apply_field(ty, &val);
++        }
++        out
++    }
++
++    /// Parse from a PSBT output `unknown` map (MWEB `0x90+` keys with empty key only).
++    pub fn from_unknown_map(unknown: &BTreeMap<raw::Key, Vec<u8>>) -> Self {
++        let mut out = Self::default();
++        for (k, v) in unknown {
++            if !k.key.is_empty() {
++                continue;
++            }
++            if (MWEB_OUTPUT_FIELD_MIN..=MWEB_OUTPUT_FIELD_MAX).contains(&k.type_value) {
++                out.apply_field(k.type_value, v);
++            }
++        }
++        out
++    }
++
++    /// Merge `other` into `self`, keeping existing values when set.
++    pub fn combine(&mut self, other: Self) {
++        if self.stealth_address.is_none() {
++            self.stealth_address = other.stealth_address;
++        }
++        if self.commit.is_none() {
++            self.commit = other.commit;
++        }
++        if self.features.is_none() {
++            self.features = other.features;
++        }
++        if self.sender_pubkey.is_none() {
++            self.sender_pubkey = other.sender_pubkey;
++        }
++        if self.output_pubkey.is_none() {
++            self.output_pubkey = other.output_pubkey;
++        }
++        if self.standard_fields.is_none() {
++            self.standard_fields = other.standard_fields;
++        }
++        if self.range_proof.is_none() {
++            self.range_proof = other.range_proof;
++        }
++        if self.signature.is_none() {
++            self.signature = other.signature;
++        }
++        if self.extra_data.is_none() {
++            self.extra_data = other.extra_data;
++        }
++    }
++}
+diff --git a/litecoin/src/psbt/mweb/types.rs b/litecoin/src/psbt/mweb/types.rs
+new file mode 100644
+index 0000000..7b7b15e
+--- /dev/null
++++ b/litecoin/src/psbt/mweb/types.rs
+@@ -0,0 +1,98 @@
++// SPDX-License-Identifier: CC0-1.0
++
++//! MWEB PSBT key type constants (ltcsuite / ltcd compatible).
++
++// --- Global ---
++
++/// `MwebTxOffsetType`
++pub const MWEB_TX_OFFSET_TYPE: u8 = 0x90;
++/// `MwebTxStealthOffsetType`
++pub const MWEB_TX_STEALTH_OFFSET_TYPE: u8 = 0x91;
++/// `MwebKernelCountType`
++pub const MWEB_KERNEL_COUNT_TYPE: u8 = 0x92;
++/// Global MWEB kernel field (`type_value=0x93`, key =
++/// `[kernel_index: u32 LE][field_ty: u8]` plus optional pegout index for type 4).
++pub const MWEB_GLOBAL_KERNEL_FIELD_TYPE: u8 = 0x93;
++/// Global MWEB output field (`type_value=0x94`, key = `[output_index: u32 LE][field_ty: u8]`).
++pub const MWEB_GLOBAL_OUTPUT_FIELD_TYPE: u8 = 0x94;
++
++// --- Input ---
++
++/// `MwebSpentOutputIdType`
++pub const MWEB_SPENT_OUTPUT_ID_TYPE: u8 = 0x90;
++/// `MwebSpentOutputCommitType`
++pub const MWEB_SPENT_OUTPUT_COMMIT_TYPE: u8 = 0x91;
++/// `MwebSpentOutputPubKeyType`
++pub const MWEB_SPENT_OUTPUT_PUBKEY_TYPE: u8 = 0x92;
++/// `MwebInputPubKeyType`
++pub const MWEB_INPUT_PUBKEY_TYPE: u8 = 0x93;
++/// `MwebInputFeaturesType`
++pub const MWEB_INPUT_FEATURES_TYPE: u8 = 0x94;
++/// `MwebInputSignatureType`
++pub const MWEB_INPUT_SIGNATURE_TYPE: u8 = 0x95;
++/// `MwebAddressIndexType`
++pub const MWEB_ADDRESS_INDEX_TYPE: u8 = 0x96;
++/// `MwebInputAmountType`
++pub const MWEB_INPUT_AMOUNT_TYPE: u8 = 0x97;
++/// `MwebSharedSecretType`
++pub const MWEB_SHARED_SECRET_TYPE: u8 = 0x98;
++/// `MwebKeyExchangePubKeyType`
++pub const MWEB_KEY_EXCHANGE_PUBKEY_TYPE: u8 = 0x99;
++/// `MwebMasterScanKeyOriginType`
++pub const MWEB_MASTER_SCAN_KEY_ORIGIN_TYPE: u8 = 0x9A;
++/// `MwebMasterSpendKeyOriginType`
++pub const MWEB_MASTER_SPEND_KEY_ORIGIN_TYPE: u8 = 0x9B;
++/// `MwebInputExtraDataType`
++pub const MWEB_INPUT_EXTRA_DATA_TYPE: u8 = 0x9C;
++
++/// Inclusive range of PSBT input MWEB field type bytes.
++pub const MWEB_INPUT_FIELD_MIN: u8 = MWEB_SPENT_OUTPUT_ID_TYPE;
++/// Inclusive range of PSBT input MWEB field type bytes.
++pub const MWEB_INPUT_FIELD_MAX: u8 = MWEB_INPUT_EXTRA_DATA_TYPE;
++
++// --- Output ---
++
++/// `MwebStealthAddressOutputType`
++pub const MWEB_STEALTH_ADDRESS_OUTPUT_TYPE: u8 = 0x90;
++/// `MwebCommitOutputType`
++pub const MWEB_COMMIT_OUTPUT_TYPE: u8 = 0x91;
++/// `MwebFeaturesOutputType`
++pub const MWEB_FEATURES_OUTPUT_TYPE: u8 = 0x92;
++/// `MwebSenderPubKeyOutputType`
++pub const MWEB_SENDER_PUBKEY_OUTPUT_TYPE: u8 = 0x93;
++/// `MwebOutputPubKeyOutputType`
++pub const MWEB_OUTPUT_PUBKEY_OUTPUT_TYPE: u8 = 0x94;
++/// `MwebStandardFieldsOutputType`
++pub const MWEB_STANDARD_FIELDS_OUTPUT_TYPE: u8 = 0x95;
++/// `MwebRangeProofOutputType`
++pub const MWEB_RANGE_PROOF_OUTPUT_TYPE: u8 = 0x96;
++/// `MwebSignatureOutputType`
++pub const MWEB_SIGNATURE_OUTPUT_TYPE: u8 = 0x97;
++/// `MwebExtraDataOutputType`
++pub const MWEB_EXTRA_DATA_OUTPUT_TYPE: u8 = 0x98;
++
++/// Inclusive range of PSBT output MWEB field type bytes.
++pub const MWEB_OUTPUT_FIELD_MIN: u8 = MWEB_STEALTH_ADDRESS_OUTPUT_TYPE;
++/// Inclusive range of PSBT output MWEB field type bytes.
++pub const MWEB_OUTPUT_FIELD_MAX: u8 = MWEB_EXTRA_DATA_OUTPUT_TYPE;
++
++// --- Kernel (field type in global `0x93` key suffix) ---
++
++/// `MwebKernelExcessCommitType`
++pub const MWEB_KERNEL_EXCESS_COMMIT_TYPE: u8 = 0;
++/// `MwebKernelStealthCommitType`
++pub const MWEB_KERNEL_STEALTH_COMMIT_TYPE: u8 = 1;
++/// `MwebKernelFeeType`
++pub const MWEB_KERNEL_FEE_TYPE: u8 = 2;
++/// `MwebKernelPeginAmountType`
++pub const MWEB_KERNEL_PEGIN_AMOUNT_TYPE: u8 = 3;
++/// `MwebKernelPegoutType`
++pub const MWEB_KERNEL_PEGOUT_TYPE: u8 = 4;
++/// `MwebKernelLockHeightType`
++pub const MWEB_KERNEL_LOCK_HEIGHT_TYPE: u8 = 5;
++/// `MwebKernelFeaturesType`
++pub const MWEB_KERNEL_FEATURES_TYPE: u8 = 6;
++/// `MwebKernelExtraDataType`
++pub const MWEB_KERNEL_EXTRA_DATA_TYPE: u8 = 7;
++/// `MwebKernelSignatureType`
++pub const MWEB_KERNEL_SIGNATURE_TYPE: u8 = 8;
+diff --git a/litecoin/src/serde_utils.rs b/litecoin/src/serde_utils.rs
+index c58598f..aff4961 100644
+--- a/litecoin/src/serde_utils.rs
++++ b/litecoin/src/serde_utils.rs
+@@ -522,3 +522,109 @@ macro_rules! serde_struct_human_string_impl {
+     )
+ }
+ pub(crate) use serde_struct_human_string_impl;
++
++/// Serde helpers for `Option<[u8; N]>` where `N > 32` (serde's built-in array support stops at 32).
++pub mod hex_array_opt {
++    #![allow(missing_docs)]
++
++    use hex::{DisplayHex, FromHex};
++
++    macro_rules! define_opt_array {
++        ($mod_name:ident, $len:expr) => {
++            pub mod $mod_name {
++                use super::*;
++
++                pub fn serialize<S>(v: &Option<[u8; $len]>, s: S) -> Result<S::Ok, S::Error>
++                where
++                    S: serde::Serializer,
++                {
++                    match v {
++                        None => s.serialize_none(),
++                        Some(arr) if s.is_human_readable() => {
++                            s.serialize_some(&format!("{:x}", arr.as_hex()))
++                        }
++                        Some(arr) => s.serialize_some(arr.as_slice()),
++                    }
++                }
++
++                pub fn deserialize<'de, D>(d: D) -> Result<Option<[u8; $len]>, D::Error>
++                where
++                    D: serde::Deserializer<'de>,
++                {
++                    struct Visitor;
++                    impl<'de> serde::de::Visitor<'de> for Visitor {
++                        type Value = Option<[u8; $len]>;
++                        fn expecting(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
++                            write!(f, "optional hex or byte array of length {}", $len)
++                        }
++                        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
++                            Ok(None)
++                        }
++                        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
++                            Ok(None)
++                        }
++                        fn visit_some<D: serde::Deserializer<'de>>(
++                            self,
++                            d: D,
++                        ) -> Result<Self::Value, D::Error> {
++                            struct BytesVisitor;
++                            impl<'de> serde::de::Visitor<'de> for BytesVisitor {
++                                type Value = [u8; $len];
++                                fn expecting(
++                                    &self,
++                                    f: &mut core::fmt::Formatter,
++                                ) -> core::fmt::Result {
++                                    write!(f, "hex string or {} bytes", $len)
++                                }
++                                fn visit_str<E: serde::de::Error>(
++                                    self,
++                                    v: &str,
++                                ) -> Result<Self::Value, E> {
++                                    let bytes = Vec::from_hex(v).map_err(E::custom)?;
++                                    if bytes.len() != $len {
++                                        return Err(E::invalid_length(bytes.len(), &self));
++                                    }
++                                    let mut arr = [0u8; $len];
++                                    arr.copy_from_slice(&bytes);
++                                    Ok(arr)
++                                }
++                                fn visit_bytes<E: serde::de::Error>(
++                                    self,
++                                    v: &[u8],
++                                ) -> Result<Self::Value, E> {
++                                    if v.len() != $len {
++                                        return Err(E::invalid_length(v.len(), &self));
++                                    }
++                                    let mut arr = [0u8; $len];
++                                    arr.copy_from_slice(v);
++                                    Ok(arr)
++                                }
++                                fn visit_seq<A: serde::de::SeqAccess<'de>>(
++                                    self,
++                                    mut seq: A,
++                                ) -> Result<Self::Value, A::Error> {
++                                    let mut arr = [0u8; $len];
++                                    for i in 0..$len {
++                                        arr[i] = seq
++                                            .next_element()?
++                                            .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
++                                    }
++                                    Ok(arr)
++                                }
++                            }
++                            if d.is_human_readable() {
++                                Ok(Some(d.deserialize_str(BytesVisitor)?))
++                            } else {
++                                Ok(Some(d.deserialize_byte_buf(BytesVisitor)?))
++                            }
++                        }
++                    }
++                    d.deserialize_option(Visitor)
++                }
++            }
++        };
++    }
++
++    define_opt_array!(n33, 33);
++    define_opt_array!(n64, 64);
++}

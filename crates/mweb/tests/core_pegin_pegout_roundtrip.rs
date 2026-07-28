@@ -3,6 +3,7 @@
 //! Requires `LITECOIND_EXE`. Skips when unset.
 
 use bdk_mweb::keys::{MasterKeyScheme, MasterKeys};
+#[allow(deprecated)]
 use bdk_mweb::tx_builder::{build_pegin, kernel_id, MwebTxBuilder, CHANGE_ADDRESS_INDEX};
 use bdk_mweb::{scan_litecoin_tx, AddressBook, MwebCoinDatabase, DEFAULT_GAP_LIMIT};
 use bdk_testenv::{try_node_from_env, MWEB_PEGIN_MATURITY};

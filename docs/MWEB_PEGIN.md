@@ -27,16 +27,19 @@ Full decoded sample: [`mweb_pegin_regtest.decoded.json`](mweb_pegin_regtest.deco
 
 Peg-ins are only safe to spend inside MWEB after **6 confirmations** (Litecoin Core / LIP guidance). Regtest acceptance mines ≥6 blocks after broadcast.
 
-## Authoring (Phase 5)
+## Authoring (Phase 5+)
 
-**BDK can author the peg-in body** via `bdk_mweb::build_pegin` (bulletproofs + kernel signing). Order:
+**BDK authors peg-ins maps-first** via `fund_mweb_pegin` → `sign_funded_mweb_pegin`
+(computes `kernel_id`) → transparent v9 PSBT → `extract_tx_with_mweb`.
 
-1. `FinishedMwebPegin = build_pegin(...)` → `kernel_id`, `pegin_amount`, `mw_tx`
-2. Transparent coin selection: `TxBuilder::apply_mweb_pegin(&pegin)` (feature `mweb`) or
-   `add_mweb_pegin(kernel_id, amount)` + `mweb_tx(mw_tx)`
-3. `finish_mweb_pegin` → sign PSBT → `extract_pegin_with_mweb_psbt` → broadcast
+Wallet happy path:
 
-BIP174 still cannot carry `mw_tx`; the body stays aside until extract. Paying a stealth address with an empty SPK still yields **`MwebPegInRequiresKernel`**.
+1. `Wallet::prepare_mweb_pegin` (fund+sign MWEB maps, then transparent coin select with v9)
+2. `wallet.sign(&mut prepared.psbt, …)` for transparent inputs
+3. `extract_prepared_mweb_pegin(&prepared.psbt)` → broadcast
+
+Legacy sidecar `build_pegin` / `extract_pegin_with_mweb_psbt` remain available but deprecated.
+Paying a stealth address with an empty SPK still yields **`MwebPegInRequiresKernel`**.
 
 ### Alternate: Core / mwebd finalize
 
