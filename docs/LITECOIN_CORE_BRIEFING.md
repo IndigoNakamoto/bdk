@@ -16,6 +16,19 @@ We’ve forked [bitcoindevkit/bdk](https://github.com/bitcoindevkit/bdk) onto a 
 
 Wallet facade lives in sibling repo `IndigoNakamoto/bdk_wallet` (`litecoin`); this repo holds `bdk_core` / `bdk_chain` / clients / `bdk_mweb`.
 
+### Validation path: Nexus first, then BDK
+
+Practical starting point was the Litecoin Foundation **Nexus** wallet on phone — the shipped Private Litecoin / MWEB UX most users actually have. That informed what “done” had to feel like (stealth addresses, peg-in/out, MWEB send/receive) and what we refused to ship as a library backend (GPL `lndltc` / Nexus embed).
+
+On mainnet we then used Nexus only as an **address/tx counterparty**:
+
+1. Peg dust transparent → MWEB in BDK (`LitecoinCore`-scheme seed, Nexus-compatible).
+2. **BDK → Nexus** MWEB send (proven 2026-07-27; identify by **wtxid**, not empty-skeleton `txid`).
+3. **Nexus → BDK** receive via LIP sync or `scan-tx` hex paste.
+4. Peg out back to BIP84 transparent.
+
+So: Nexus is the production reference wallet and interop peer; BDK is the MIT/Apache light-wallet stack that talks to it without linking any Nexus code. Details: [LITECOIN_E2E.md](LITECOIN_E2E.md) § BDK ↔ Nexus.
+
 ---
 
 ## Commit timeline (what landed)
@@ -79,7 +92,7 @@ Latest tip: `58171f0a` — *consume litecoin 0.32.8-rc.2 PSBT maps and harden Pe
 
 - **Testnet:** BIP84 receive + spend via Electrum-LTC.
 - **Regtest:** `bdk_mweb` tests, wallet `mweb_facade`, peg-in/spend, bulletproof gate vs Core proofs.
-- **Mainnet (2026-07-27):** peg-in, MWEB send, peg-out loop; broadcast lesson — prefer local `sendrawtransaction` + **wtxid** (empty-skeleton `txid` collision on explorers).
+- **Mainnet (2026-07-27):** peg-in → **send to Nexus** → peg-out loop; receive-from-Nexus path ready (`sync` / `scan-tx`). Broadcast lesson — prefer local `sendrawtransaction` + **wtxid** (empty-skeleton `txid` collision on explorers).
 
 ---
 
