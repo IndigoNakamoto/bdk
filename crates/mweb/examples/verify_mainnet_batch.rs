@@ -1,7 +1,7 @@
 //! Live check: fetch a mainnet UTXO batch and verify PMMR roots.
 //! Usage: LITECOIN_P2P=127.0.0.1:9333 cargo run -p bdk_mweb --example verify_mainnet_batch --features lip0006
-use bdk_mweb::lip0006_tcp::TcpMwebPeer;
 use bdk_mweb::lip0006::MwebUtxoSource;
+use bdk_mweb::lip0006_tcp::TcpMwebPeer;
 use bdk_mweb::p2p::{GetMwebUtxos, OUTPUT_FORMAT_FULL};
 use bdk_mweb::pmmr::{verify_leafset, verify_utxo_batch};
 use bitcoin::Network;
@@ -39,7 +39,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut peer = TcpMwebPeer::connect(&addr, Network::Bitcoin)?;
     let hdr = peer.get_header(tip_hash)?;
     let leafset = peer.get_leafset(tip_hash)?;
-    verify_leafset(&leafset, &hdr.mweb_header.leafset_root, hdr.mweb_header.output_mmr_size)?;
+    verify_leafset(
+        &leafset,
+        &hdr.mweb_header.leafset_root,
+        hdr.mweb_header.output_mmr_size,
+    )?;
     println!("leafset ok mmr_size={}", hdr.mweb_header.output_mmr_size);
 
     let batch = peer.get_utxos(GetMwebUtxos {

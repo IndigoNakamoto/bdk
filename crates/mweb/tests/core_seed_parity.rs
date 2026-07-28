@@ -23,9 +23,13 @@ fn core_mweb_addresses_match_bdk_after_sethdseed() {
 
     let seed = <Vec<u8>>::from_hex(SEED_HEX).unwrap();
     let secp = Secp256k1::new();
-    let keys =
-        MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-            .unwrap();
+    let keys = MasterKeys::from_seed(
+        &seed,
+        Network::Regtest,
+        MasterKeyScheme::LitecoinCore,
+        &secp,
+    )
+    .unwrap();
 
     // Core `sethdseed` takes a WIF whose raw secret is the BIP32 seed material.
     let seed_sk = SecretKey::from_slice(&seed).expect("seed is valid secret");

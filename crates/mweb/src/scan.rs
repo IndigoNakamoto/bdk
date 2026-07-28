@@ -296,8 +296,7 @@ mod tests {
     use bitcoin::{Network, NetworkKind};
     use hex_conservative::FromHex;
 
-    const KEYCHAIN_SEED: &str =
-        "2a64df085eefedd8bfdbb33176b5ba2e62e8be8b56c8837795598bb6c440c064";
+    const KEYCHAIN_SEED: &str = "2a64df085eefedd8bfdbb33176b5ba2e62e8be8b56c8837795598bb6c440c064";
 
     fn fixture_hex(name: &str) -> Vec<u8> {
         let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -319,8 +318,7 @@ mod tests {
 
     fn keychain_keys(secp: &Secp256k1<All>) -> MasterKeys {
         let seed = <[u8; 32]>::from_hex(KEYCHAIN_SEED).unwrap();
-        MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::LitecoinCore, secp)
-            .unwrap()
+        MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::LitecoinCore, secp).unwrap()
     }
 
     /// Prefix through OutputMessage (excludes range proof + signature).
@@ -470,7 +468,9 @@ mod tests {
         assert_eq!(coin.amount, 10_000_000); // 0.1 LTC
         assert_eq!(coin.address_index, 0);
         assert_eq!(
-            keys.address(0, NetworkKind::Test, &secp).unwrap().to_string(),
+            keys.address(0, NetworkKind::Test, &secp)
+                .unwrap()
+                .to_string(),
             "tmweb1qqv0mlyyk7sl09jkcrgy059m5yplw567ypuj6lxpwkcw4tl8m59p7wq6jc\
              6prtph5kf45kdlql8fjppr32nmwng34fs6ess9fq72ck7lfyvmr6s0c"
         );
@@ -500,14 +500,11 @@ mod tests {
         )
         .unwrap();
         let addr = good.address(0, NetworkKind::Main, &secp).unwrap();
-        let (_, _, made) =
-            create_output_with_sender(&addr, 500_000, &sender, &secp).unwrap();
+        let (_, _, made) = create_output_with_sender(&addr, 500_000, &sender, &secp).unwrap();
         assert_matches_go_preimage(&made, &raw, "wrong-scan target");
 
         let book = AddressBook::from_keys(&good, 20, &secp).unwrap();
-        assert!(rewind_output(&good, &book, &made, &secp)
-            .unwrap()
-            .is_some());
+        assert!(rewind_output(&good, &book, &made, &secp).unwrap().is_some());
         assert!(rewind_output(&good, &book, &output, &secp)
             .unwrap()
             .is_some());
@@ -524,8 +521,7 @@ mod tests {
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
         )
         .unwrap();
-        let (_, _, output) =
-            create_output_with_sender(&addr, amount, &sender, &secp).unwrap();
+        let (_, _, output) = create_output_with_sender(&addr, amount, &sender, &secp).unwrap();
 
         let raw = fixture_hex("output_roundtrip_index0_deadbeef.hex");
         assert_matches_go_preimage(&output, &raw, "index0 deadbeef");
@@ -556,13 +552,16 @@ mod tests {
         let secp = Secp256k1::new();
         let keys = keychain_keys(&secp);
         let book = AddressBook::from_keys(&keys, 20, &secp).unwrap();
-        let cases = [(0usize, 0u32, 100_000u64), (1, 1, 200_000), (2, 10, 300_000)];
+        let cases = [
+            (0usize, 0u32, 100_000u64),
+            (1, 1, 200_000),
+            (2, 10, 300_000),
+        ];
 
         for (vec_idx, index, amount) in cases {
             let addr = keys.address(index, NetworkKind::Main, &secp).unwrap();
             let sender = multi_index_sender(vec_idx);
-            let (_, _, output) =
-                create_output_with_sender(&addr, amount, &sender, &secp).unwrap();
+            let (_, _, output) = create_output_with_sender(&addr, amount, &sender, &secp).unwrap();
 
             let raw = fixture_hex(&format!("output_roundtrip_{index}.hex"));
             assert_matches_go_preimage(&output, &raw, &format!("index {index}"));

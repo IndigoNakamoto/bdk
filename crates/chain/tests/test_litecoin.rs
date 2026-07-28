@@ -13,7 +13,7 @@ use bdk_chain::bitcoin::{
     constants::genesis_block,
     hex::{DisplayHex, FromHex},
     p2p::Magic,
-    Amount, Address, Network, OutPoint, ScriptBuf, Transaction, TxOut, Txid,
+    Address, Amount, Network, OutPoint, ScriptBuf, Transaction, TxOut, Txid,
 };
 use bdk_chain::spk_txout::SpkTxOutIndex;
 use bdk_chain::{is_mweb_bridge_output, ConfirmationBlockTime, Merge, TxGraph};

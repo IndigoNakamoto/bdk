@@ -17,7 +17,9 @@ use bitcoin::secp256k1::All;
 use crate::coin_db::MwebCoinDatabase;
 use crate::error::Error;
 use crate::keys::MasterKeys;
-use crate::lip0006::{verify_parent_hashes_present, MwebUtxoSource, SyncResult, VerifyMode, DEFAULT_UTXO_BATCH};
+use crate::lip0006::{
+    verify_parent_hashes_present, MwebUtxoSource, SyncResult, VerifyMode, DEFAULT_UTXO_BATCH,
+};
 use crate::p2p::{GetMwebUtxos, OUTPUT_FORMAT_FULL};
 use crate::pmmr::{verify_leafset, verify_utxo_batch};
 use crate::scan::{scan_utxo_entries_at, AddressBook};
@@ -132,11 +134,7 @@ impl SyncState {
 /// Date a leaf index using a height→`output_mmr_size` map (mwebsync binary-search semantics).
 ///
 /// Returns the first sampled height where `leaves_at_height > leaf_index`, else `tip_height`.
-pub fn date_leaf_index(
-    height_map: &BTreeMap<u32, u64>,
-    leaf_index: u64,
-    tip_height: u32,
-) -> u32 {
+pub fn date_leaf_index(height_map: &BTreeMap<u32, u64>, leaf_index: u64, tip_height: u32) -> u32 {
     // heights ascending; first where (leaves - 1) >= leaf_index ⇔ leaves > leaf_index
     for (&height, &leaves) in height_map.iter() {
         if leaves > leaf_index {
@@ -534,11 +532,7 @@ impl PeerPool {
     ///
     /// Prefer this when the closure needs mid-pass state (e.g. checkpoint callbacks) that
     /// cannot be expressed through [`MwebSyncer::run_once_with_pool`].
-    pub fn with_failover<R, F>(
-        &mut self,
-        network: bitcoin::Network,
-        mut f: F,
-    ) -> Result<R, Error>
+    pub fn with_failover<R, F>(&mut self, network: bitcoin::Network, mut f: F) -> Result<R, Error>
     where
         F: FnMut(&mut crate::lip0006_tcp::TcpMwebPeer) -> Result<R, Error>,
     {
@@ -695,9 +689,7 @@ impl MwebSyncer {
 
         // Reorg / tip divergence: clear dated heights and force a fresh leafset baseline.
         let tip_changed = state.tip_hash.is_some_and(|h| h != tip_hash);
-        let tip_shorter = state
-            .tip_height
-            .is_some_and(|prev| tip_height + 1 < prev);
+        let tip_shorter = state.tip_height.is_some_and(|prev| tip_height + 1 < prev);
         if tip_shorter || tip_changed {
             if tip_shorter {
                 db.disconnect_from(tip_height.saturating_add(1));
@@ -707,7 +699,9 @@ impl MwebSyncer {
                 db.disconnect_from(rewind);
             }
             state.invalidate_leafset();
-            state.height_map.retain(|&h, _| h < tip_height.saturating_sub(self.fine_window.max(1)));
+            state
+                .height_map
+                .retain(|&h, _| h < tip_height.saturating_sub(self.fine_window.max(1)));
         }
 
         self.sample_fine_headers(headers, source, state, tip_height)?;
@@ -719,9 +713,7 @@ impl MwebSyncer {
         };
         let mweb_header = header_msg.as_ref().map(|h| h.mweb_header.clone());
         if let Some(ref hdr) = mweb_header {
-            state
-                .height_map
-                .insert(tip_height, hdr.output_mmr_size);
+            state.height_map.insert(tip_height, hdr.output_mmr_size);
         }
 
         let leafset = source.get_leafset(tip_hash)?;
@@ -749,7 +741,11 @@ impl MwebSyncer {
         let mut all_fetched_ids = BTreeSet::new();
         // Resume mid-download: same tip, or first-sync (empty leafset) across tip advance.
         // Leaf indices are append-only; a higher tip only adds higher leaves / clears spent bits.
-        let resume_cursor = match (state.utxo_cursor, state.pending_tip_hash, state.leafset.is_empty()) {
+        let resume_cursor = match (
+            state.utxo_cursor,
+            state.pending_tip_hash,
+            state.leafset.is_empty(),
+        ) {
             (Some(c), Some(pending), true) if pending != tip_hash => {
                 #[cfg(feature = "std")]
                 eprintln!(
@@ -859,11 +855,7 @@ impl MwebSyncer {
                 all_fetched_ids.insert(oid);
                 entries.push((entry.leaf_index, entry.output.clone()));
             }
-            let last_leaf = batch
-                .utxos
-                .last()
-                .map(|e| e.leaf_index)
-                .unwrap_or(start);
+            let last_leaf = batch.utxos.last().map(|e| e.leaf_index).unwrap_or(start);
 
             let found = scan_utxo_entries_at(keys, book, &entries, db, secp, |leaf| {
                 Some(date_leaf_index(&height_map, leaf, tip_height))
@@ -883,9 +875,7 @@ impl MwebSyncer {
 
             let done = idx_i >= indices.len();
             let should_checkpoint = checkpoint.is_some()
-                && (batch_i == 1
-                    || batch_i % CHECKPOINT_EVERY_BATCHES == 0
-                    || done);
+                && (batch_i == 1 || batch_i % CHECKPOINT_EVERY_BATCHES == 0 || done);
             if should_checkpoint {
                 if let Some(cb) = checkpoint.as_mut() {
                     cb(state, db);
@@ -968,17 +958,7 @@ impl MwebSyncer {
         let mut last;
         loop {
             let tip_before = notifier.header_tip_height().unwrap_or(0);
-            last = self.run_once(
-                headers,
-                notifier,
-                source,
-                state,
-                keys,
-                book,
-                db,
-                secp,
-                None,
-            )?;
+            last = self.run_once(headers, notifier, source, state, keys, book, db, secp, None)?;
             if should_stop() {
                 break;
             }
@@ -1011,9 +991,7 @@ impl MwebSyncer {
         N: SyncNotifier,
     {
         pool.with_failover(network, |peer| {
-            self.run_once(
-                headers, notifier, peer, state, keys, book, db, secp, None,
-            )
+            self.run_once(headers, notifier, peer, state, keys, book, db, secp, None)
         })
     }
 
@@ -1196,10 +1174,7 @@ mod tests {
     #[test]
     fn filter_spans_after_cursor_trims() {
         let spans = vec![(0, 10), (20, 5), (30, 3)];
-        assert_eq!(
-            filter_spans_after_cursor(spans.clone(), None),
-            spans
-        );
+        assert_eq!(filter_spans_after_cursor(spans.clone(), None), spans);
         assert_eq!(
             filter_spans_after_cursor(spans.clone(), Some(9)),
             vec![(20, 5), (30, 3)]

@@ -28,8 +28,7 @@ where
         }
 
         fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
-            v.try_into()
-                .map_err(|_| E::invalid_length(v.len(), &self))
+            v.try_into().map_err(|_| E::invalid_length(v.len(), &self))
         }
 
         fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {

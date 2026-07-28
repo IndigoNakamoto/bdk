@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use bitcoin::address::AddressData;
 use bitcoin::blockdata::mimblewimble::{
-    self as mweb, KernelFeatures, PegOutCoin, TxBody, Transaction as MwebTransaction,
+    self as mweb, KernelFeatures, PegOutCoin, Transaction as MwebTransaction, TxBody,
 };
 use bitcoin::key::Secp256k1;
 use bitcoin::psbt::mweb::{MwebInput, MwebKernel};
@@ -27,9 +27,7 @@ use crate::psbt::{
     mweb_output_from_wire, scrub_sensitive_fields,
 };
 use crate::scan::output_id;
-use crate::tx_builder::{
-    create_input, create_kernel, create_output, CHANGE_ADDRESS_INDEX,
-};
+use crate::tx_builder::{create_input, create_kernel, create_output, CHANGE_ADDRESS_INDEX};
 
 /// Staged output produced during fund (blinds kept off-PSBT until sign).
 #[derive(Debug, Clone)]
@@ -561,4 +559,3 @@ pub fn sign_funded_mweb_pegin(
     scrub_sensitive_fields(&mut funded.psbt);
     Ok(kid)
 }
-

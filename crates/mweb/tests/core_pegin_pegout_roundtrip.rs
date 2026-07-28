@@ -21,9 +21,13 @@ fn bdk_pegin_then_pegout_roundtrip() {
 
     let seed = <Vec<u8>>::from_hex(SEED_HEX).unwrap();
     let secp = Secp256k1::new();
-    let keys =
-        MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-            .unwrap();
+    let keys = MasterKeys::from_seed(
+        &seed,
+        Network::Regtest,
+        MasterKeyScheme::LitecoinCore,
+        &secp,
+    )
+    .unwrap();
     let book = AddressBook::from_keys(&keys, DEFAULT_GAP_LIMIT, &secp).unwrap();
 
     let mining = env.mine_to_pre_mweb().expect("pre-mweb");
@@ -87,7 +91,8 @@ fn bdk_pegin_then_pegout_roundtrip() {
     env.rpc
         .send_raw_transaction(&finished.tx)
         .expect("send peg-out");
-    env.mine_blocks(1, &mining).expect("confirm peg-out / HogEx");
+    env.mine_blocks(1, &mining)
+        .expect("confirm peg-out / HogEx");
 
     // HogEx pays the peg-out SPK. Core's listunspent may omit HogEx outs; credit via RPC + tip.
     let tip = env.rpc.get_block_count().expect("height");
@@ -96,9 +101,10 @@ fn bdk_pegin_then_pegout_roundtrip() {
     let hogex = tip_block.txdata.last().expect("hogex");
     assert!(hogex.is_hog_ex, "tip must end with HogEx");
     assert!(
-        hogex.output.iter().any(|o| {
-            o.value == pegout_amt && o.script_pubkey == pegout_addr.script_pubkey()
-        }),
+        hogex
+            .output
+            .iter()
+            .any(|o| { o.value == pegout_amt && o.script_pubkey == pegout_addr.script_pubkey() }),
         "HogEx must contain peg-out {pegout_amt} to watched SPK; outputs={:?}",
         hogex
             .output
@@ -113,9 +119,7 @@ fn bdk_pegin_then_pegout_roundtrip() {
             serde_json::json!([pegout_addr.to_string(), 1]),
         )
         .expect("getreceivedbyaddress");
-    let received_btc = received
-        .as_f64()
-        .expect("getreceivedbyaddress amount");
+    let received_btc = received.as_f64().expect("getreceivedbyaddress amount");
     assert_eq!(
         Amount::from_btc(received_btc).expect("amount"),
         pegout_amt,

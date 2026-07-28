@@ -23,9 +23,13 @@ fn tcp_p2p_header_and_pmmr_syncs_owned_balance() {
 
     let seed = <Vec<u8>>::from_hex(SEED_HEX).unwrap();
     let secp = Secp256k1::new();
-    let keys =
-        MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-            .unwrap();
+    let keys = MasterKeys::from_seed(
+        &seed,
+        Network::Regtest,
+        MasterKeyScheme::LitecoinCore,
+        &secp,
+    )
+    .unwrap();
     let book = AddressBook::from_keys(&keys, DEFAULT_GAP_LIMIT, &secp).unwrap();
     let addr = keys.address(2, NetworkKind::Test, &secp).unwrap();
 

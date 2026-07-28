@@ -20,9 +20,13 @@ fn core_mw_tx_bulletproof_verifies_under_ffi() {
 
     let seed = <Vec<u8>>::from_hex(SEED_HEX).unwrap();
     let secp = Secp256k1::new();
-    let keys =
-        MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-            .unwrap();
+    let keys = MasterKeys::from_seed(
+        &seed,
+        Network::Regtest,
+        MasterKeyScheme::LitecoinCore,
+        &secp,
+    )
+    .unwrap();
     let addr = keys.address(2, NetworkKind::Test, &secp).unwrap();
 
     let mining = env.mine_to_pre_mweb().expect("pre-mweb");

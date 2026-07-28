@@ -15,9 +15,9 @@ use crate::error::Error;
 
 /// Compressed J from Litecoin `GENERATOR_J_PUB` (see `libmw/.../secp256k1-zkp.h`).
 const GENERATOR_J: [u8; 33] = [
-    0x02, 0xb8, 0x60, 0xf5, 0x67, 0x95, 0xfc, 0x03, 0xf3, 0xc2, 0x16, 0x85, 0x38, 0x3d, 0x1b,
-    0x5a, 0x2f, 0x29, 0x54, 0xf4, 0x9b, 0x7e, 0x39, 0x8b, 0x8d, 0x2a, 0x01, 0x93, 0x93, 0x36,
-    0x21, 0x15, 0x5f,
+    0x02, 0xb8, 0x60, 0xf5, 0x67, 0x95, 0xfc, 0x03, 0xf3, 0xc2, 0x16, 0x85, 0x38, 0x3d, 0x1b, 0x5a,
+    0x2f, 0x29, 0x54, 0xf4, 0x9b, 0x7e, 0x39, 0x8b, 0x8d, 0x2a, 0x01, 0x93, 0x93, 0x36, 0x21, 0x15,
+    0x5f,
 ];
 
 /// Pedersen commitment `C = v·H + r·G` in Core wire format (33 bytes).
@@ -185,7 +185,10 @@ pub fn secret_mul(a: &[u8; 32], b: &[u8; 32]) -> Result<[u8; 32], Error> {
 pub mod mw {
     use super::Error;
     use secp256k1zkp::pedersen::{Commitment, RangeProof};
-    use secp256k1zkp::{aggsig, ffi, ContextFlag, Message, PublicKey as GrinPk, SecretKey as GrinSk, Secp256k1, Signature};
+    use secp256k1zkp::{
+        aggsig, ffi, ContextFlag, Message, PublicKey as GrinPk, Secp256k1, SecretKey as GrinSk,
+        Signature,
+    };
     use std::sync::OnceLock;
 
     fn secp() -> &'static Secp256k1 {
@@ -255,7 +258,9 @@ pub mod mw {
         Ok(out)
     }
 
-    pub(super) fn commitment_to_pubkey(commitment: &[u8; 33]) -> Result<bitcoin::secp256k1::PublicKey, Error> {
+    pub(super) fn commitment_to_pubkey(
+        commitment: &[u8; 33],
+    ) -> Result<bitcoin::secp256k1::PublicKey, Error> {
         let secp = secp();
         let commit = Commitment::from_vec(commitment.to_vec());
         let pk = commit
@@ -414,6 +419,10 @@ mod tests {
         let c1 = switch_commit(&blind, 100_000, &secp).unwrap();
         let c2 = switch_commit(&blind, 100_000, &secp).unwrap();
         assert_eq!(c1, c2);
-        assert!(c1[0] == 8 || c1[0] == 9, "pedersen prefix, got {:02x}", c1[0]);
+        assert!(
+            c1[0] == 8 || c1[0] == 9,
+            "pedersen prefix, got {:02x}",
+            c1[0]
+        );
     }
 }

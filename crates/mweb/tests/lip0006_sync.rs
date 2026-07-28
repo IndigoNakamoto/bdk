@@ -10,8 +10,8 @@ use bdk_mweb::p2p::{MwebHeaderMsg, MwebLeafset};
 use bdk_mweb::{AddressBook, MwebCoinDatabase, DEFAULT_GAP_LIMIT};
 use bdk_testenv::try_node_from_env;
 use bitcoin::absolute::LockTime;
-use bitcoin::blockdata::block::MwebBlockHeader;
 use bitcoin::block::{Header, Version};
+use bitcoin::blockdata::block::MwebBlockHeader;
 use bitcoin::hashes::Hash;
 use bitcoin::key::Secp256k1;
 use bitcoin::merkle_tree::PartialMerkleTree;
@@ -66,9 +66,13 @@ fn scripted_lip0006_sync_rewinds_core_output() {
 
     let seed = <Vec<u8>>::from_hex(SEED_HEX).unwrap();
     let secp = Secp256k1::new();
-    let keys =
-        MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-            .unwrap();
+    let keys = MasterKeys::from_seed(
+        &seed,
+        Network::Regtest,
+        MasterKeyScheme::LitecoinCore,
+        &secp,
+    )
+    .unwrap();
     let book = AddressBook::from_keys(&keys, DEFAULT_GAP_LIMIT, &secp).unwrap();
     let addr = keys.address(2, NetworkKind::Test, &secp).unwrap();
 

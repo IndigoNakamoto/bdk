@@ -246,7 +246,9 @@ impl RpcClient {
             .ok_or_else(|| anyhow!("getrawmempool returned non-array"))?;
         arr.iter()
             .map(|t| {
-                let s = t.as_str().ok_or_else(|| anyhow!("mempool txid not a string"))?;
+                let s = t
+                    .as_str()
+                    .ok_or_else(|| anyhow!("mempool txid not a string"))?;
                 Ok(s.parse()?)
             })
             .collect()
@@ -265,16 +267,14 @@ impl RpcClient {
                     .parse()?;
                 let vout = u["vout"]
                     .as_u64()
-                    .ok_or_else(|| anyhow!("listunspent missing vout"))? as u32;
+                    .ok_or_else(|| anyhow!("listunspent missing vout"))?
+                    as u32;
                 let amount = Amount::from_btc(
                     u["amount"]
                         .as_f64()
                         .ok_or_else(|| anyhow!("listunspent missing amount"))?,
                 )?;
-                let script_pubkey_hex = u["scriptPubKey"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string();
+                let script_pubkey_hex = u["scriptPubKey"].as_str().unwrap_or("").to_string();
                 Ok(Unspent {
                     txid,
                     vout,
@@ -527,7 +527,11 @@ impl LitecoinNodeEnv {
     }
 
     /// Core-wallet finalize: `sendtoaddress` to an MWEB stealth address, return the full tx.
-    pub fn finalize_mweb_pegin(&self, mweb_address: &Address, amount: Amount) -> Result<Transaction> {
+    pub fn finalize_mweb_pegin(
+        &self,
+        mweb_address: &Address,
+        amount: Amount,
+    ) -> Result<Transaction> {
         let txid = self.rpc.send_to_address(mweb_address, amount)?;
         let hex = self.rpc.get_wallet_transaction_hex(&txid)?;
         Ok(deserialize_hex(&hex)?)
@@ -650,8 +654,9 @@ impl LitecoinTestEnv {
     pub fn from_env() -> Result<Self> {
         let litecoind = std::env::var("LITECOIND_EXE")
             .map_err(|_| anyhow!("LITECOIND_EXE is not set; skipping Litecoin regtest harness"))?;
-        let electrs = std::env::var("ELECTRS_LTC_EXE")
-            .map_err(|_| anyhow!("ELECTRS_LTC_EXE is not set; skipping Litecoin regtest harness"))?;
+        let electrs = std::env::var("ELECTRS_LTC_EXE").map_err(|_| {
+            anyhow!("ELECTRS_LTC_EXE is not set; skipping Litecoin regtest harness")
+        })?;
         Self::spawn(PathBuf::from(litecoind), PathBuf::from(electrs))
     }
 
@@ -765,7 +770,11 @@ impl LitecoinTestEnv {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             let node_height = self.rpc.get_block_count()?;
-            match electrum_call(&self.electrum_host, "blockchain.headers.subscribe", json!([])) {
+            match electrum_call(
+                &self.electrum_host,
+                "blockchain.headers.subscribe",
+                json!([]),
+            ) {
                 Ok(v) => {
                     let tip = v["height"].as_u64().unwrap_or(u64::MAX) as u32;
                     if tip == node_height {

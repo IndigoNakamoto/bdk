@@ -85,9 +85,9 @@ fn sync_and_assert(address: &str) {
         .unwrap_or_else(|| panic!("known fixture txid {KNOWN_TXID} must be present for {address}"));
 
     assert!(
-        node.anchors.iter().any(|a| {
-            a.block_id.height == ANCHOR_HEIGHT && a.block_id.hash == anchor_hash
-        }),
+        node.anchors
+            .iter()
+            .any(|a| { a.block_id.height == ANCHOR_HEIGHT && a.block_id.hash == anchor_hash }),
         "txid {KNOWN_TXID} must be anchored at height {ANCHOR_HEIGHT} / {ANCHOR_HASH}, got {:?}",
         node.anchors
     );

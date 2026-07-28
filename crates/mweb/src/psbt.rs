@@ -88,11 +88,7 @@ pub fn mweb_kernel_from_wire(k: &Kernel) -> MwebKernel {
         stealth_commit: k.stealth_excess.map(|pk| pk.serialize().to_vec()),
         fee: k.fee.map(|f| f as u64),
         pegin_amount: k.pegin.map(|a| a as u64),
-        pegouts: k
-            .pegouts
-            .iter()
-            .map(native::pegout_psbt_value)
-            .collect(),
+        pegouts: k.pegouts.iter().map(native::pegout_psbt_value).collect(),
         lock_height: k.lock_height,
         features: Some(k.features),
         extra_data: if k.extra_data.is_empty() {
@@ -129,7 +125,11 @@ pub fn populate_psbt_from_mw(psbt: &mut Psbt, mw: &MwebTransaction, coins: &[Mwe
 /// `populateMwebKeyOrigins`).
 ///
 /// Always overwrites any pre-existing origin fields from wallet metadata.
-pub fn populate_mweb_key_origins(psbt: &mut Psbt, keys: &crate::keys::MasterKeys, secp: &Secp256k1<All>) {
+pub fn populate_mweb_key_origins(
+    psbt: &mut Psbt,
+    keys: &crate::keys::MasterKeys,
+    secp: &Secp256k1<All>,
+) {
     let scan_pk = keys.scan_public(secp);
     let spend_pk = keys.spend_public(secp);
     let scan_ks = keys.scan_key_source();
@@ -192,9 +192,7 @@ pub fn validate_mweb_key_origins_against(
                     "MWEB scan key origin fingerprint/path mismatch".into(),
                 ))
             }
-            None => {
-                return Err(Error::Crypto("missing MWEB scan key origin".into()))
-            }
+            None => return Err(Error::Crypto("missing MWEB scan key origin".into())),
         }
         match &inp.master_spend_key_origin {
             Some((_, ks)) if *ks == expect_spend => {}
@@ -203,9 +201,7 @@ pub fn validate_mweb_key_origins_against(
                     "MWEB spend key origin fingerprint/path mismatch".into(),
                 ))
             }
-            None => {
-                return Err(Error::Crypto("missing MWEB spend key origin".into()))
-            }
+            None => return Err(Error::Crypto("missing MWEB spend key origin".into())),
         }
     }
     Ok(())
@@ -445,9 +441,13 @@ mod tests {
     fn finished_mweb_tx_maps_roundtrip_and_extract() {
         let secp = Secp256k1::new();
         let seed = [7u8; 32];
-        let keys =
-            MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap();
+        let keys = MasterKeys::from_seed(
+            &seed,
+            Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
         let recv = keys.address(1, NetworkKind::Test, &secp).unwrap();
 
         let pegin = build_pegin(&keys, 1, 1_000_000, 50_000, NetworkKind::Test, &secp).unwrap();
@@ -465,10 +465,7 @@ mod tests {
         assert!(!psbt.mweb_outputs.is_empty());
         assert!(!psbt.mweb_kernels.is_empty());
         assert_eq!(psbt.mweb_inputs[0].amount, Some(coin.amount));
-        assert_eq!(
-            psbt.mweb_inputs[0].shared_secret,
-            Some(coin.shared_secret)
-        );
+        assert_eq!(psbt.mweb_inputs[0].shared_secret, Some(coin.shared_secret));
         assert!(psbt.mweb_inputs[0].signature.is_some());
         assert!(psbt.mweb_outputs[0].range_proof.is_some());
         assert!(psbt.mweb_kernels[0].signature.is_some());
@@ -486,9 +483,13 @@ mod tests {
     fn fund_sign_extract_emits_stealth_and_scrubs() {
         let secp = Secp256k1::new();
         let seed = [11u8; 32];
-        let keys =
-            MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap();
+        let keys = MasterKeys::from_seed(
+            &seed,
+            Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
         let pegin = build_pegin(&keys, 1, 1_000_000, 50_000, NetworkKind::Test, &secp).unwrap();
         let coin = pegin.outputs[0].clone();
         let recv = keys.address(2, NetworkKind::Test, &secp).unwrap();
@@ -541,10 +542,7 @@ mod tests {
         assert!(funded.psbt.mweb_inputs[0].signature.is_none());
 
         sign_funded_mweb(&mut funded, &keys, &secp).unwrap();
-        assert!(
-            funded.psbt.mweb_tx_offset.is_some(),
-            "offsets set at sign"
-        );
+        assert!(funded.psbt.mweb_tx_offset.is_some(), "offsets set at sign");
         assert!(funded.psbt.mweb_inputs[0].signature.is_some());
         assert!(funded.psbt.mweb_inputs[0].amount.is_none());
         assert!(funded.psbt.mweb_inputs[0].shared_secret.is_none());
@@ -578,9 +576,13 @@ mod tests {
         use crate::psbt_fund::{fund_mweb_pegin, sign_funded_mweb_pegin};
         let secp = Secp256k1::new();
         let seed = [13u8; 32];
-        let keys =
-            MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap();
+        let keys = MasterKeys::from_seed(
+            &seed,
+            Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
         let mut funded =
             fund_mweb_pegin(&keys, 2, 1_000_000, 50_000, NetworkKind::Test, &secp).unwrap();
         assert!(funded.psbt.mweb_inputs.is_empty());
@@ -597,7 +599,11 @@ mod tests {
         assert_eq!(decoded.mweb_kernels.len(), 1);
         assert_eq!(decoded.mweb_outputs.len(), 1);
         assert_eq!(
-            decoded.mweb_outputs[0].stealth_address.as_ref().unwrap().len(),
+            decoded.mweb_outputs[0]
+                .stealth_address
+                .as_ref()
+                .unwrap()
+                .len(),
             66
         );
     }

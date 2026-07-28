@@ -140,7 +140,6 @@ impl TcpMwebPeer {
         }
     }
 
-
     fn handshake(&mut self) -> Result<(), Error> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -148,9 +147,7 @@ impl TcpMwebPeer {
             .unwrap_or(0);
         // NODE_NETWORK | NODE_WITNESS | NODE_MWEB_LIGHT_CLIENT (1<<23).
         let services = ServiceFlags::from(
-            u64::from(ServiceFlags::NETWORK)
-                | u64::from(ServiceFlags::WITNESS)
-                | (1u64 << 23),
+            u64::from(ServiceFlags::NETWORK) | u64::from(ServiceFlags::WITNESS) | (1u64 << 23),
         );
         let version = VersionMessage {
             version: 70017,
@@ -186,7 +183,9 @@ impl TcpMwebPeer {
             }
         }
         if !saw_version || !saw_verack {
-            return Err(Error::Crypto("p2p handshake: incomplete version/verack".into()));
+            return Err(Error::Crypto(
+                "p2p handshake: incomplete version/verack".into(),
+            ));
         }
         Ok(())
     }

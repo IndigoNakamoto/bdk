@@ -20,9 +20,13 @@ fn bdk_mweb_spend_accepted_by_litecoind() {
 
     let seed = <Vec<u8>>::from_hex(SEED_HEX).unwrap();
     let secp = Secp256k1::new();
-    let keys =
-        MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-            .unwrap();
+    let keys = MasterKeys::from_seed(
+        &seed,
+        Network::Regtest,
+        MasterKeyScheme::LitecoinCore,
+        &secp,
+    )
+    .unwrap();
     let book = AddressBook::from_keys(&keys, DEFAULT_GAP_LIMIT, &secp).unwrap();
 
     let addr = keys.address(2, NetworkKind::Test, &secp).unwrap();
@@ -42,7 +46,10 @@ fn bdk_mweb_spend_accepted_by_litecoind() {
         .into_iter()
         .find(|c| c.address_index == 2 && c.amount == peg_in.to_sat())
         .expect("coin at index 2");
-    assert!(coin.spend_key.is_some(), "spend key required for Input::Create");
+    assert!(
+        coin.spend_key.is_some(),
+        "spend key required for Input::Create"
+    );
 
     let payee = env.rpc.get_new_mweb_address().expect("payee mweb addr");
     let pay_amount = Amount::from_btc(0.3).unwrap();
@@ -76,8 +83,7 @@ fn bdk_mweb_spend_accepted_by_litecoind() {
         .list_received_by_mweb_address(&payee, 1)
         .expect("listreceived");
     assert_eq!(
-        credited,
-        pay_amount,
+        credited, pay_amount,
         "Core payee must be credited after BDK spend"
     );
 

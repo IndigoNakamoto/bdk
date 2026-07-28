@@ -96,7 +96,10 @@ fn read_coin(row: &rusqlite::Row<'_>) -> rusqlite::Result<MwebCoin> {
     let mut cmt = [0u8; 33];
     let mut bl = [0u8; 32];
     let mut ss = [0u8; 32];
-    if output_id.len() != 32 || commitment.len() != 33 || blind.len() != 32 || shared_secret.len() != 32
+    if output_id.len() != 32
+        || commitment.len() != 33
+        || blind.len() != 32
+        || shared_secret.len() != 32
     {
         return Err(rusqlite::Error::InvalidQuery);
     }
@@ -121,13 +124,9 @@ fn read_coin(row: &rusqlite::Row<'_>) -> rusqlite::Result<MwebCoin> {
         blind: bl,
         shared_secret: ss,
         spend_key: spend,
-        block_height: row
-            .get::<_, Option<i64>>("block_height")?
-            .map(|h| h as u32),
+        block_height: row.get::<_, Option<i64>>("block_height")?.map(|h| h as u32),
         is_pegin: row.get::<_, i64>("is_pegin").unwrap_or(0) != 0,
-        leaf_index: row
-            .get::<_, Option<i64>>("leaf_index")?
-            .map(|i| i as u64),
+        leaf_index: row.get::<_, Option<i64>>("leaf_index")?.map(|i| i as u64),
     })
 }
 

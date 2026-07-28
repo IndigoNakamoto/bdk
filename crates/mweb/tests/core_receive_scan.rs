@@ -19,9 +19,13 @@ fn core_send_to_bdk_address_is_rewound() {
 
     let seed = <Vec<u8>>::from_hex(SEED_HEX).unwrap();
     let secp = Secp256k1::new();
-    let keys =
-        MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-            .unwrap();
+    let keys = MasterKeys::from_seed(
+        &seed,
+        Network::Regtest,
+        MasterKeyScheme::LitecoinCore,
+        &secp,
+    )
+    .unwrap();
     let book = AddressBook::from_keys(&keys, DEFAULT_GAP_LIMIT, &secp).unwrap();
 
     // Index 2 is the first user receive index in Core's keypool convention.
@@ -52,7 +56,9 @@ fn core_send_to_bdk_address_is_rewound() {
     );
     assert_eq!(db.unspent_count(), found.len());
     assert!(
-        found.iter().any(|c| c.address_index == 2 && c.amount == amount.to_sat()),
+        found
+            .iter()
+            .any(|c| c.address_index == 2 && c.amount == amount.to_sat()),
         "expected a coin at address index 2 for {amount}; got {:?}",
         found
             .iter()

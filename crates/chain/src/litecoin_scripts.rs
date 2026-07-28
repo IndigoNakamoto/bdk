@@ -55,10 +55,7 @@ mod tests {
 
     #[test]
     fn ignores_ordinary_segwit() {
-        let p2wpkh = ScriptBuf::from_hex(
-            "00147f91924ca69474ef38b06884d1762fdbdc440265",
-        )
-        .unwrap();
+        let p2wpkh = ScriptBuf::from_hex("00147f91924ca69474ef38b06884d1762fdbdc440265").unwrap();
         assert!(!is_mweb_bridge_output(&p2wpkh));
     }
 

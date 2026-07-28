@@ -645,7 +645,10 @@ mod tests {
                 .as_slice(),
         )
         .unwrap();
-        assert_eq!(id, expected, "Kernel::GetHash must equal v9 program / vkern.kernel_id");
+        assert_eq!(
+            id, expected,
+            "Kernel::GetHash must equal v9 program / vkern.kernel_id"
+        );
 
         let v9 = tx
             .output

@@ -477,11 +477,8 @@ mod test {
             return;
         };
 
-        let rpc_client = Client::new(
-            &env.rpc_url,
-            Auth::CookieFile(env.cookie_file.clone()),
-        )
-        .expect("rpc client");
+        let rpc_client = Client::new(&env.rpc_url, Auth::CookieFile(env.cookie_file.clone()))
+            .expect("rpc client");
         let genesis = rpc_client.get_block_hash(0).expect("genesis");
         let (chain, _) = LocalChain::from_genesis(genesis);
         let mut emitter = Emitter::new(&rpc_client, chain.tip(), 1, NO_EXPECTED_MEMPOOL_TXS);

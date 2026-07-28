@@ -28,4 +28,4 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)
 
 # Until crates.io publishes litecoin 0.32.8-rc.2 (native PSBTv2 MWEB maps).
 [patch.crates-io]
-litecoin = { path = "../rust-litecoin/litecoin" }
+litecoin = { git = "https://github.com/IndigoNakamoto/rust-litecoin.git", branch = "mweb-psbt-typed-maps" }

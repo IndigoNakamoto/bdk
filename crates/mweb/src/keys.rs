@@ -169,10 +169,7 @@ pub fn address_index_tweak(scan_secret: &SecretKey, index: u32) -> [u8; 32] {
 }
 
 /// Convenience: Core scheme from seed on `network`.
-pub fn master_keys_from_seed(
-    seed: &[u8],
-    network: Network,
-) -> Result<MasterKeys, Error> {
+pub fn master_keys_from_seed(seed: &[u8], network: Network) -> Result<MasterKeys, Error> {
     let secp = Secp256k1::new();
     MasterKeys::from_seed(seed, network, MasterKeyScheme::LitecoinCore, &secp)
 }
@@ -186,9 +183,13 @@ mod tests {
     fn spend_key_tweak_is_deterministic() {
         let secp = Secp256k1::new();
         let seed = [0x42u8; 32];
-        let keys =
-            MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap();
+        let keys = MasterKeys::from_seed(
+            &seed,
+            Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
         let b0 = keys.spend_key_at(0).unwrap();
         let b0_again = keys.spend_key_at(0).unwrap();
         assert_eq!(b0, b0_again);
@@ -199,9 +200,13 @@ mod tests {
     fn stealth_scan_pubkey_matches_a_times_bi() {
         let secp = Secp256k1::new();
         let seed = [0x11u8; 32];
-        let keys =
-            MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap();
+        let keys = MasterKeys::from_seed(
+            &seed,
+            Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
         let (a_i, b_i) = keys.stealth_pubkeys(7, &secp).unwrap();
         let scan_scalar = Scalar::from_be_bytes(keys.scan.secret_bytes()).unwrap();
         let expected = b_i.mul_tweak(&secp, &scan_scalar).unwrap();
@@ -212,9 +217,13 @@ mod tests {
     fn address_round_trips_bech32() {
         let secp = Secp256k1::new();
         let seed = [0xAAu8; 32];
-        let keys =
-            MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap();
+        let keys = MasterKeys::from_seed(
+            &seed,
+            Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
         let addr = keys.address(0, NetworkKind::Test, &secp).unwrap();
         let encoded = addr.to_string();
         assert!(
@@ -239,9 +248,13 @@ mod tests {
             "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
         )
         .unwrap();
-        let keys =
-            MasterKeys::from_seed(&seed, Network::Regtest, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap();
+        let keys = MasterKeys::from_seed(
+            &seed,
+            Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
         let tweak = address_index_tweak(&keys.scan, 0);
         assert_eq!(
             tweak.to_lower_hex_string(),
@@ -270,9 +283,13 @@ mod tests {
             "2a64df085eefedd8bfdbb33176b5ba2e62e8be8b56c8837795598bb6c440c064",
         )
         .unwrap();
-        let keys =
-            MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap();
+        let keys = MasterKeys::from_seed(
+            &seed,
+            Network::Bitcoin,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
 
         assert_eq!(
             keys.scan.secret_bytes().to_lower_hex_string(),

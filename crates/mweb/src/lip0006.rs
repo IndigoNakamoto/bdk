@@ -18,9 +18,7 @@ use bitcoin::secp256k1::All;
 use crate::coin_db::{MwebCoin, MwebCoinDatabase};
 use crate::error::Error;
 use crate::keys::MasterKeys;
-use crate::p2p::{
-    GetMwebUtxos, MwebHeaderMsg, MwebLeafset, MwebUtxos, OUTPUT_FORMAT_FULL,
-};
+use crate::p2p::{GetMwebUtxos, MwebHeaderMsg, MwebLeafset, MwebUtxos, OUTPUT_FORMAT_FULL};
 use crate::pmmr::{verify_leafset, verify_utxo_batch};
 use crate::scan::{scan_utxo_entries_at, AddressBook};
 

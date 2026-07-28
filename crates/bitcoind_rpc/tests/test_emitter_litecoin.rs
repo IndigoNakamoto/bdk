@@ -15,11 +15,8 @@ fn emitter_syncs_local_chain_on_litecoin_regtest() {
         return;
     };
 
-    let client = Client::new(
-        &env.rpc_url,
-        Auth::CookieFile(env.cookie_file.clone()),
-    )
-    .expect("rpc client");
+    let client =
+        Client::new(&env.rpc_url, Auth::CookieFile(env.cookie_file.clone())).expect("rpc client");
 
     let genesis = client.get_block_hash(0).expect("genesis");
     let (mut local_chain, _) = LocalChain::from_genesis(genesis);
@@ -39,10 +36,7 @@ fn emitter_syncs_local_chain_on_litecoin_regtest() {
     }
 
     let tip = client.get_block_count().expect("tip") as u32;
-    assert!(
-        tip >= 10,
-        "expected at least 10 blocks mined, tip={tip}"
-    );
+    assert!(tip >= 10, "expected at least 10 blocks mined, tip={tip}");
     assert!(
         emitted.iter().any(|(h, _)| *h == tip),
         "emitter must reach tip {tip}; emitted={emitted:?}"

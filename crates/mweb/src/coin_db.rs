@@ -239,9 +239,7 @@ impl MwebCoinDatabase {
         coin.block_height = Some(height);
         #[cfg(feature = "persist")]
         {
-            self.staged
-                .coins
-                .insert(*output_id, coin.clone());
+            self.staged.coins.insert(*output_id, coin.clone());
         }
         true
     }

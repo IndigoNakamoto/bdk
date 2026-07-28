@@ -153,8 +153,7 @@ impl MemMmr {
         while !next.is_leaf() {
             let left = self.hash_at(next.left_child().position);
             let right = *self.hashes.last().expect("parent has right child");
-            self.hashes
-                .push(parent_hash(next.position, &left, &right));
+            self.hashes.push(parent_hash(next.position, &left, &right));
             next = next.next();
         }
         leaf_index
@@ -406,9 +405,7 @@ pub fn verify_utxo_batch(
 
     for entry in &batch.utxos {
         if !bitset_test(bits, entry.leaf_index) {
-            return Err(Error::Crypto(
-                "utxo leaf_index not set in leafset".into(),
-            ));
+            return Err(Error::Crypto("utxo leaf_index not set in leafset".into()));
         }
     }
 
@@ -594,10 +591,7 @@ fn assemble_parent_hashes(
 ) -> Vec<[u8; 32]> {
     let num_leaves = mmr.num_leaves();
     let hash_indices = calc_hash_indices(unspent_bits, num_leaves, first_leaf, last_leaf);
-    let mut hashes: Vec<[u8; 32]> = hash_indices
-        .iter()
-        .map(|pos| mmr.hash_at(*pos))
-        .collect();
+    let mut hashes: Vec<[u8; 32]> = hash_indices.iter().map(|pos| mmr.hash_at(*pos)).collect();
     let peaks = peak_indices(num_nodes_for_leaves(num_leaves));
     let last_node = Index::at(leaf_position(last_leaf));
     if let Some(mountain) = peaks.iter().find(|p| p.position >= last_node.position) {
@@ -679,7 +673,8 @@ mod tests {
         let output_root = mmr.root();
         let leafset_bytes = {
             // bits 0..3 set
-            let ls = MwebLeafset::from_indices(BlockHash::from_byte_array([1u8; 32]), &[0, 1, 2, 3]);
+            let ls =
+                MwebLeafset::from_indices(BlockHash::from_byte_array([1u8; 32]), &[0, 1, 2, 3]);
             ls.leafset
         };
         let leafset_root = blake3_hash(&leafset_bytes);

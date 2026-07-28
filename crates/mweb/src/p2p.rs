@@ -13,8 +13,8 @@ use bitcoin::blockdata::mimblewimble::Output;
 use bitcoin::consensus::encode::{self, Decodable, Encodable, VarInt};
 use bitcoin::hashes::Hash;
 use bitcoin::io::{self, Read, Write};
-use bitcoin::Transaction;
 use bitcoin::MerkleBlock;
+use bitcoin::Transaction;
 
 /// `getdata` inventory type for MWEB header (LIP-0006).
 pub const MSG_MWEB_HEADER: u32 = 0x2000_0008;
