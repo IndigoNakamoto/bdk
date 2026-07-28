@@ -19,7 +19,7 @@ workspace = true
 bdk_chain = { path = "../chain", version = "0.23.1", default-features = false }
 anyhow = { version = "1", default-features = false }
 electrsd = { version = "0.38.0", features = [ "legacy" ], default-features = false, optional = true }
-bitcoin = { package = "litecoin", version = "0.32.8-rc.1", default-features = false }
+bitcoin = { package = "litecoin", version = "0.32.8-rc.2", default-features = false }
 # Litecoin regtest harness (feature = "litecoin-daemon")
 ureq = { version = "3", optional = true, default-features = true }
 serde = { version = "1", optional = true, features = ["derive"] }

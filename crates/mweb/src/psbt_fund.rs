@@ -1,8 +1,10 @@
 //! In-PSBT fund → sign → scrub lifecycle (ltcwallet `SignMwebComponents` shape).
 //!
-//! Funding stages typed MWEB maps **without** an assembled [`MwebTransaction`]. Signing fills
-//! input/kernel signatures and offsets, then extract builds `mw_tx` from maps only.
+//! Funding stages typed MWEB maps on a native [`Psbt`] **without** an assembled
+//! [`MwebTransaction`]. Signing fills input/kernel signatures and offsets, scrubs secrets,
+//! then [`Psbt::extract_tx_with_mweb`] builds `mw_tx` from maps only.
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use bitcoin::address::AddressData;
@@ -11,6 +13,7 @@ use bitcoin::blockdata::mimblewimble::{
 };
 use bitcoin::consensus::serialize;
 use bitcoin::key::Secp256k1;
+use bitcoin::psbt::mweb::{MwebInput, MwebKernel};
 use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::All;
 use bitcoin::transaction::Version;
@@ -21,7 +24,8 @@ use crate::crypto::{blind_sum, blind_switch, random_secret};
 use crate::error::Error;
 use crate::keys::MasterKeys;
 use crate::psbt::{
-    MwebPsbt, MwebPsbtInput, MwebPsbtKernel, MwebPsbtOutput,
+    enrich_input_from_coin, extract_tx_with_mweb, mweb_input_from_wire, mweb_kernel_from_wire,
+    mweb_output_from_wire, scrub_sensitive_fields,
 };
 use crate::scan::output_id;
 use crate::tx_builder::{
@@ -46,8 +50,8 @@ pub struct StagedMwebOutput {
 /// Funded but unsigned MWEB spend (no `mw_tx` yet).
 #[derive(Debug, Clone)]
 pub struct FundedMwebPsbt {
-    /// PSBT with MWEB maps; [`MwebPsbt::mw_tx`] is `None` until sign.
-    pub mweb: MwebPsbt,
+    /// Native PSBT with MWEB maps; `mw_tx` is assembled only at extract.
+    pub psbt: Psbt,
     /// Input coins (secrets for signing).
     pub spent_coins: Vec<MwebCoin>,
     /// Staged outputs (pre-sort order matching fund creation).
@@ -58,7 +62,14 @@ pub struct FundedMwebPsbt {
     pub pegouts: Vec<(ScriptBuf, u64)>,
 }
 
-/// Fund an MWEB→MWEB / peg-out spend: populate maps, leave `mw_tx` unset.
+impl FundedMwebPsbt {
+    /// Extract network tx after [`sign_funded_mweb`].
+    pub fn extract_tx(&self) -> Result<Transaction, Error> {
+        extract_tx_with_mweb(&self.psbt)
+    }
+}
+
+/// Fund an MWEB→MWEB / peg-out spend: populate native maps, leave offsets/sigs unset.
 pub fn fund_mweb_spend(
     inputs: Vec<MwebCoin>,
     recipients: Vec<(Address, u64)>,
@@ -95,7 +106,7 @@ pub fn fund_mweb_spend(
     let mut mweb_outputs = Vec::with_capacity(all_recipients.len());
     for (i, (addr, amount)) in all_recipients.iter().enumerate() {
         let (raw_blind, sender_key, output) = create_output(addr, *amount, secp)?;
-        let mut mapped = MwebPsbtOutput::from_mweb_output(&output);
+        let mut mapped = mweb_output_from_wire(&output);
         mapped.stealth_address = Some(stealth_address_bytes(addr)?);
         mweb_outputs.push(mapped);
         staged.push(StagedMwebOutput {
@@ -113,16 +124,16 @@ pub fn fund_mweb_spend(
 
     let mut mweb_inputs = Vec::with_capacity(inputs.len());
     for coin in &inputs {
-        let mut inp = MwebPsbtInput {
+        let mut inp = MwebInput {
             output_id: Some(coin.output_id),
             commit: Some(coin.commitment),
             amount: Some(coin.amount),
             address_index: Some(coin.address_index),
             shared_secret: Some(coin.shared_secret),
             features: Some(0x01), // stealth feature expected at sign
-            ..MwebPsbtInput::default()
+            ..MwebInput::default()
         };
-        inp.enrich_from_coin(coin);
+        enrich_input_from_coin(&mut inp, coin);
         mweb_inputs.push(inp);
     }
 
@@ -148,11 +159,11 @@ pub fn fund_mweb_spend(
         Some(serialize(&coins))
     };
 
-    let kernel = MwebPsbtKernel {
+    let kernel = MwebKernel {
         fee: (fee > 0).then_some(fee),
         pegout: pegout_ser,
         features: Some(features),
-        ..MwebPsbtKernel::default()
+        ..MwebKernel::default()
     };
 
     let unsigned = Transaction {
@@ -163,19 +174,18 @@ pub fn fund_mweb_spend(
         mw_tx: None,
         is_hog_ex: false,
     };
-    let psbt = Psbt::from_unsigned_tx(unsigned)
+    let mut psbt = Psbt::from_unsigned_tx(unsigned)
         .map_err(|e| Error::Crypto(format!("psbt from_unsigned_tx: {e}")))?;
 
-    let mut mweb = MwebPsbt::from_psbt(psbt);
-    mweb.mweb_inputs = mweb_inputs;
-    mweb.mweb_outputs = mweb_outputs;
-    mweb.kernels = vec![kernel];
-    mweb.mw_tx = None;
-    mweb.apply_unknown_maps();
+    psbt.mweb_inputs = mweb_inputs;
+    psbt.mweb_outputs = mweb_outputs;
+    psbt.mweb_kernels = vec![kernel];
+    psbt.mweb_tx_offset = None;
+    psbt.mweb_stealth_offset = None;
 
-    let _ = CHANGE_ADDRESS_INDEX; // documented convention; change_index is explicit
+    let _ = CHANGE_ADDRESS_INDEX;
     Ok(FundedMwebPsbt {
-        mweb,
+        psbt,
         spent_coins: inputs,
         staged_outputs: staged,
         fee,
@@ -185,49 +195,21 @@ pub fn fund_mweb_spend(
 
 /// Sign a funded MWEB PSBT: create inputs/kernel, set offsets into maps, scrub secrets.
 ///
-/// Leaves [`MwebPsbt::mw_tx`] unset — assemble only at [`MwebPsbt::extract_tx_with_mweb`].
+/// Leaves `mw_tx` unset on the transparent skeleton — assemble only at
+/// [`Psbt::extract_tx_with_mweb`] / [`FundedMwebPsbt::extract_tx`].
 pub fn sign_funded_mweb(
     funded: &mut FundedMwebPsbt,
-    keys: &MasterKeys,
+    _keys: &MasterKeys,
     secp: &Secp256k1<All>,
 ) -> Result<(), Error> {
     let mut outputs = Vec::with_capacity(funded.staged_outputs.len());
     let mut out_blinds = Vec::with_capacity(funded.staged_outputs.len());
     let mut out_keys = Vec::with_capacity(funded.staged_outputs.len());
-    let mut change_coin = None;
 
     for staged in &funded.staged_outputs {
         let switched = blind_switch(&staged.raw_blind, staged.amount, secp)?;
         out_blinds.push(switched);
         out_keys.push(staged.sender_key);
-        if let Some(index) = staged.change_index {
-            let ke = staged
-                .output
-                .message
-                .standard_fields
-                .as_ref()
-                .ok_or(Error::Crypto("missing standard fields".into()))?
-                .key_exchange_pubkey;
-            let (t, spend) = crate::tx_builder::shared_secret_and_spend_for_owned(
-                keys,
-                index,
-                &ke,
-                &staged.output.receiver_public_key,
-                secp,
-            )?;
-            change_coin = Some(MwebCoin {
-                output_id: output_id(&staged.output),
-                commitment: staged.output.commitment,
-                amount: staged.amount,
-                address_index: index,
-                blind: staged.raw_blind,
-                shared_secret: t,
-                spend_key: Some(spend),
-                block_height: None,
-                is_pegin: false,
-                leaf_index: None,
-            });
-        }
         outputs.push(staged.output.clone());
     }
 
@@ -307,36 +289,53 @@ pub fn sign_funded_mweb(
     };
 
     // Preserve stealth addresses across remap.
-    let stealth_by_commit: alloc::collections::BTreeMap<[u8; 33], Vec<u8>> = funded
-        .mweb
+    let stealth_by_commit: BTreeMap<[u8; 33], Vec<u8>> = funded
+        .psbt
         .mweb_outputs
         .iter()
-        .filter_map(|o| {
-            Some((*o.commit.as_ref()?, o.stealth_address.clone()?))
+        .filter_map(|o| Some((*o.commit.as_ref()?, o.stealth_address.clone()?)))
+        .collect();
+
+    funded.psbt.mweb_tx_offset = Some(mw.kernel_offset);
+    funded.psbt.mweb_stealth_offset = Some(mw.stealth_offset);
+    funded.psbt.mweb_kernels = mw.body.kernels.iter().map(mweb_kernel_from_wire).collect();
+    funded.psbt.mweb_outputs = mw.body.outputs.iter().map(mweb_output_from_wire).collect();
+    funded.psbt.mweb_inputs = mw
+        .body
+        .inputs
+        .iter()
+        .map(|inp| {
+            let mut mapped = mweb_input_from_wire(inp);
+            if let Some(coin) = funded
+                .spent_coins
+                .iter()
+                .find(|c| c.output_id == inp.output_id)
+            {
+                enrich_input_from_coin(&mut mapped, coin);
+            }
+            mapped
         })
         .collect();
 
-    funded.mweb.populate_maps_from_mw_public(&mw, &funded.spent_coins);
-    for out in &mut funded.mweb.mweb_outputs {
+    for out in &mut funded.psbt.mweb_outputs {
         if let Some(c) = out.commit {
             if let Some(sa) = stealth_by_commit.get(&c) {
                 out.stealth_address = Some(sa.clone());
             }
         }
     }
-    // Maps are the PSBT source of truth until extract.
-    funded.mweb.mw_tx = None;
-    let _ = mw;
-    funded.mweb.apply_unknown_maps();
-    funded.mweb.scrub_sensitive_fields();
 
-    // Stash change on funded for wallet insert (optional).
-    let _ = change_coin;
+    scrub_sensitive_fields(&mut funded.psbt);
+    let _ = mw;
     Ok(())
 }
 
 /// Extract change coin from staged outputs after a successful sign (if any).
-pub fn change_from_funded(funded: &FundedMwebPsbt, keys: &MasterKeys, secp: &Secp256k1<All>) -> Result<Option<MwebCoin>, Error> {
+pub fn change_from_funded(
+    funded: &FundedMwebPsbt,
+    keys: &MasterKeys,
+    secp: &Secp256k1<All>,
+) -> Result<Option<MwebCoin>, Error> {
     for staged in &funded.staged_outputs {
         if let Some(index) = staged.change_index {
             let ke = staged

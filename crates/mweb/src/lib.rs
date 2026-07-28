@@ -50,9 +50,14 @@ pub use encrypt::{open_changeset, seal_changeset};
 pub use error::Error;
 pub use keys::{address_index_tweak, master_keys_from_seed, MasterKeyScheme, MasterKeys};
 pub use psbt::{
-    MwebPsbt, MwebPsbtInput, MwebPsbtKernel, MwebPsbtOutput, MWEB_KERNEL_COUNT_TYPE,
-    MWEB_TX_OFFSET_TYPE, MWEB_TX_STEALTH_OFFSET_TYPE,
+    enrich_input_from_coin, extract_tx_with_mweb, is_mweb_complete, mweb_input_from_wire,
+    mweb_kernel_from_wire, mweb_output_from_wire, populate_pegin_psbt, populate_psbt_from_mw,
+    psbt_from_finished_mweb_tx, scrub_sensitive_fields, sign_mweb_components, MwebPsbtInput,
+    MwebPsbtKernel, MwebPsbtOutput, MWEB_KERNEL_COUNT_TYPE, MWEB_TX_OFFSET_TYPE,
+    MWEB_TX_STEALTH_OFFSET_TYPE,
 };
+#[allow(deprecated)]
+pub use psbt::MwebPsbt;
 pub use psbt_fund::{
     change_from_funded, fund_mweb_spend, sign_funded_mweb, FundedMwebPsbt, StagedMwebOutput,
 };

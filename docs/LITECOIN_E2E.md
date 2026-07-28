@@ -234,8 +234,9 @@ CLI happy path uses `MwebPsbt` extract only (`attach_mweb_tx` deprecated).
 - MWEB stealth destinations (`ltcmweb1…` / `tmweb1…`) raise `CreateTxError::MwebPegInRequiresKernel`.
   Peg-in: `Wallet::prepare_mweb_pegin` + `extract_pegin_with_mweb_psbt` (Core finalize still OK).
 - Facade: `balance_combined` (confirmation buckets), `MwebStore`, `prepare_mweb_pegin`,
-  `fund_mweb_send` / `fund_mweb_pegout` → `sign_and_extract_funded_mweb`, plus legacy
-  `build_mweb_send` / `build_mweb_pegout` (feature `mweb`). See [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md).
+  `fund_mweb_send` / `fund_mweb_pegout` → `sign_and_extract_funded_mweb` on native
+  `litecoin` 0.32.8-rc.2 PSBT maps (feature `mweb`). Legacy `build_mweb_*` deprecated.
+  See [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md).
 
 MWEB spend / peg / facade acceptance (needs `LITECOIND_EXE`):
 

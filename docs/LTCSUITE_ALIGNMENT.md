@@ -86,11 +86,11 @@ ltcwallet populates origins via `populateMwebKeyOrigins` / `validateMwebKeyOrigi
 
 | | BDK now | ltcsuite reference |
 | --- | --- | --- |
-| Container | Typed `0x90+` maps in `bdk_mweb::psbt` (staging for `litecoin`); `mw_tx` **extract-only** after fund/sign | Native PSBTv2 MWEB maps in `litecoin` |
-| Sign path | `fund_mweb_*` → `sign_mweb_components` → scrub → extract (ltcwallet-shaped) | `SignMwebComponents` inside PSBT |
+| Container | Native `bitcoin::psbt::mweb` (`litecoin` **0.32.8-rc.2**); `mw_tx` **extract-only** via `Psbt::extract_tx_with_mweb` | Native PSBTv2 MWEB maps in `litecoin` |
+| Sign path | `fund_mweb_*` → `sign_funded_mweb` → scrub → extract (ltcwallet-shaped) | `SignMwebComponents` inside PSBT |
 | Interop | Mainnet Nexus send proven; map round-trip + fund/sign unit tests | Cross-wallet PSBT round-trip |
 
-**Port target:** merge staging types into published `litecoin` ([`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md)).
+**Upstream absorb:** staging removed; see [`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md) (crates.io publish of rc.2 still open — workspace `[patch.crates-io]`).
 
 ---
 
@@ -114,11 +114,11 @@ Behaviors BDK lacks or only partially has:
 
 | Capability | mwebsync | `bdk_mweb` today |
 | --- | --- | --- |
-| Continuous tip loop | Yes | `MwebSyncer::run_loop` (+ `run_once`) |
-| Stratified height→leaf index / UTXO dating | Yes | Fine window (last 500) + tip fallback (`mweb_sync`) |
+| Continuous tip loop | Yes | `MwebSyncer::run_loop` / `run_loop_with_pool` (+ `PollingTipNotifier`) |
+| Stratified height→leaf index / UTXO dating | Yes | Fine window **4000** default (+ `FINE_WINDOW_FAST=500`, tip-only) |
 | Differential leafset sync | Yes | `diff_leafsets` → fetch added only |
-| Multi-peer + ban | Yes | Single `TcpMwebPeer` (API allows multi later) |
-| Header wait vs Electrum tip | Explicit notifier | `SyncNotifier` / `ReadyNotifier` after Esplora |
+| Multi-peer + ban | Yes | `PeerPool` + `with_failover` / `run_once_with_pool` (ban on leafset/PMMR/timeout/connect) |
+| Header wait vs Electrum tip | Explicit notifier | `SyncNotifier` / `PollingTipNotifier` after Esplora; `ReadyNotifier` is one-shot |
 | Reorg | Rollback ≤10 rewind / >10 purge | `disconnect_from` heights + shorter-tip in syncer |
 | Verify | header + leafset + UTXO MMR | `HeaderAndPmmr` leafset + batch (aligned in spirit) |
 
@@ -130,11 +130,13 @@ What already matches: LIP-0006 message order, leafset blake3, PMMR `output_root`
 
 ## 3. Ordered backlog
 
-1. ~~**PSBTv2 MWEB types (staging)**~~ — locked vs ltcd; staging in `bdk_mweb::psbt`. Upstream
-   PR package: [`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md) (crates.io bump still open).
-2. ~~**In-PSBT fund/sign/finalize**~~ — `fund_mweb_*` + `sign_mweb_components` + scrub + extract.
+1. ~~**PSBTv2 MWEB types**~~ — native in `litecoin` 0.32.8-rc.2; BDK consumes via thin helpers
+   ([`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md); crates.io publish still open).
+2. ~~**In-PSBT fund/sign/finalize**~~ — `fund_mweb_*` + `sign_funded_mweb` + scrub +
+   `Psbt::extract_tx_with_mweb`; wallet `build_mweb_*` deprecated.
 3. ~~**Deprecate `attach_mweb_tx` on happy path**~~ — marked `#[deprecated]`.
-4. ~~**mwebsync-shaped syncer**~~ — tip-loop wait, PeerPool ban, fine window 4000 default.
+4. ~~**mwebsync-shaped syncer**~~ — tip-loop wait, `PeerPool::with_failover` /
+   `run_once_with_pool`, fine window 4000 default.
 5. ~~**Confirmation UX**~~ — CLI balance buckets + maturity copy.
 6. ~~**Broadcast policy**~~ — RPC-first for MWEB-only + wtxid; see [`MWEB_PEER_OPS.md`](MWEB_PEER_OPS.md).
 7. Mempool watch — deferred (wallet callback, not syncer).

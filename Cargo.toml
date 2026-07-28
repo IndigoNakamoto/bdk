@@ -25,3 +25,7 @@ print_stderr = "deny"
 # `daemon_tests` enables tests that need the `bitcoind` + `electrs` harness. It is a cfg rather
 # than a feature so that `--all-features` builds stay clean while the harness is Bitcoin-only.
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)', 'cfg(daemon_tests)'] }
+
+# Until crates.io publishes litecoin 0.32.8-rc.2 (native PSBTv2 MWEB maps).
+[patch.crates-io]
+litecoin = { path = "../rust-litecoin/litecoin" }

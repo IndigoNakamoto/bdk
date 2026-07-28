@@ -21,8 +21,8 @@ alternate for peg-in, but BDK can author peg-in/out bodies itself (Phase 5).
 
 | Path | Role |
 | --- | --- |
-| **`fund_mweb_*` → `sign_funded_mweb` / `sign_mweb_components` → scrub → extract** (`mw_tx` at extract; `attach_mweb_tx` deprecated) | Happy-path CLI / facade (mainnet send + peg-out) |
-| **Typed `0x90+` maps in `bdk_mweb::psbt`** (staging for published `litecoin`) | Wire-interop shape; see [`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md) |
+| **`fund_mweb_*` → `sign_funded_mweb` → scrub → `Psbt::extract_tx_with_mweb`** (`mw_tx` at extract; `attach_mweb_tx` / wallet `build_mweb_*` deprecated) | Happy-path CLI / facade (mainnet send + peg-out) |
+| **Native `bitcoin::psbt::mweb` (`litecoin` 0.32.8-rc.2)** | Wire-interop shape; BDK thin helpers in `bdk_mweb::psbt` |
 
 Do **not** invent a parallel proprietary key scheme. Do **not** embed Go.
 
@@ -103,8 +103,10 @@ A_i = a·B_i
 
 - **Peg-in:** `bdk_mweb::build_pegin` / wallet `prepare_mweb_pegin` → PSBT +
   `extract_pegin_with_mweb_psbt`. See [`MWEB_PEGIN.md`](MWEB_PEGIN.md).
-- **MWEB→MWEB:** `Wallet::build_mweb_send` → `MwebTxBuilder`; empty vin/vout Litecoin tx with `mw_tx`; no `IndexedTxGraph`.
-- **Peg-out:** `Wallet::build_mweb_pegout` → peg-out kernel; miner HogEx pays watched transparent SPKs.
+- **MWEB→MWEB:** `Wallet::fund_mweb_send` → `sign_and_extract_funded_mweb` (native PSBT maps);
+  empty vin/vout Litecoin tx with `mw_tx` at extract; no `IndexedTxGraph`.
+- **Peg-out:** `Wallet::fund_mweb_pegout` → same fund/sign/extract path with peg-out kernel;
+  miner HogEx pays watched transparent SPKs.
 - **Balance:** `Wallet::balance_combined(&MwebCoinDatabase)` — caller still owns the MWEB DB.
 
 ## Roadmap
@@ -133,8 +135,8 @@ A_i = a·B_i
 - Phase 5: `kernel_id` = Core `Kernel::GetHash`; `build_pegin` / `add_pegout`; regtest round-trip
   without Core holding MWEB keys.
 - Phase 6: **minimal facade** — `CombinedBalance` (confirmed vs untrusted pending),
-  `prepare_mweb_pegin` / `build_mweb_send` / `build_mweb_pegout` on `Wallet` (feature `mweb`).
-  No automatic domain routing in transparent `build_tx`.
+  `prepare_mweb_pegin` / `fund_mweb_send` / `fund_mweb_pegout` on `Wallet` (feature `mweb`).
+  Legacy `build_mweb_*` deprecated. No automatic domain routing in transparent `build_tx`.
 - **Parallel persist** (feature `persist` on `bdk_mweb`): serde/`Merge` `ChangeSet` staged on
   `MwebCoinDatabase`, appendable via `bdk_file_store::Store` or SQLite (`rusqlite` feature).
   Wallet [`MwebStore`] helpers load/persist beside the wallet. Not folded into
@@ -145,7 +147,8 @@ A_i = a·B_i
   Electrum stays outside the crate. Peg-in maturity = 6 (`MWEB_PEGIN_MATURITY`);
   reorgs call `MwebStore::disconnect_from(height)`. Prefer `MwebSyncer` for receive /
   confirmation dating; `sync_mweb_at_tip` remains as a one-shot helper.
-- **Next (ltcsuite parity):** absorb `bdk_mweb::psbt` into published `litecoin` PSBTv2; see
+- **ltcsuite parity:** native PSBTv2 MWEB in `litecoin` 0.32.8-rc.2 consumed; crates.io publish
+  + full in-PSBT peg-in (no `build_pegin` sidecar) remain follow-ups. See
   [`LTCSUITE_ALIGNMENT.md`](LTCSUITE_ALIGNMENT.md) and [`MWEB_PEER_OPS.md`](MWEB_PEER_OPS.md).
 
 ## False paths

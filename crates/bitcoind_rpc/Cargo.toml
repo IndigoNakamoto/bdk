@@ -14,7 +14,7 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-bitcoin = { package = "litecoin", version = "0.32.8-rc.1", default-features = false }
+bitcoin = { package = "litecoin", version = "0.32.8-rc.2", default-features = false }
 # Vendored Litecoin alias of rust-bitcoin/rust-bitcoincore-rpc @ 0.19.0 (see vendor/bitcoincore-rpc).
 bitcoincore-rpc = { path = "../../vendor/bitcoincore-rpc/client", version = "0.19.0" }
 bdk_core = { path = "../core", version = "0.6.2", default-features = false }

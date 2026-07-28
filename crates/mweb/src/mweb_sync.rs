@@ -162,13 +162,18 @@ pub trait SyncNotifier {
     fn header_tip_height(&self) -> Result<u32, Error>;
     /// Block until the transparent tip moves past `prev_height` (tip-loop idle).
     ///
-    /// Default: return immediately (one-shot / tests). Product notifiers should sleep/poll.
+    /// Default: return immediately (one-shot / tests). Product notifiers should sleep/poll
+    /// (e.g. [`PollingTipNotifier`]). [`ReadyNotifier`] intentionally keeps the default —
+    /// it is one-shot only and must not be used alone for continuous tip loops.
     fn wait_tip_changed(&mut self, _prev_height: u32) -> Result<(), Error> {
         Ok(())
     }
 }
 
 /// Notifier that assumes headers are already synced.
+///
+/// **One-shot only:** [`SyncNotifier::wait_tip_changed`] returns immediately. Pair with
+/// [`PollingTipNotifier`] (or a custom header-stream notifier) for `--follow` tip loops.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReadyNotifier {
     /// Tip height reported by [`SyncNotifier::header_tip_height`].
@@ -182,6 +187,29 @@ impl SyncNotifier for ReadyNotifier {
 
     fn header_tip_height(&self) -> Result<u32, Error> {
         Ok(self.tip_height)
+    }
+}
+
+/// Whether a sync error should ban the current peer and rotate (leafset/PMMR/timeout/IO).
+pub fn is_banworthy_peer_error(err: &Error) -> bool {
+    match err {
+        Error::Crypto(msg) => {
+            let m = msg.to_ascii_lowercase();
+            m.contains("timeout")
+                || m.contains("timed out")
+                || m.contains("leafset")
+                || m.contains("leafset_root")
+                || m.contains("output_root")
+                || m.contains("parent_hashes")
+                || m.contains("pmmr")
+                || m.contains("connection")
+                || m.contains("broken pipe")
+                || m.contains("reset by peer")
+                || m.contains("eof")
+                || m.contains("i/o")
+                || m.contains("io error")
+        }
+        _ => false,
     }
 }
 
@@ -400,7 +428,7 @@ pub fn coarse_sample_heights(from_height: u32, tip_height: u32, stride: u32) -> 
     out
 }
 
-/// Try each peer address until one connects (multi-peer failover, no ban manager).
+/// Try each peer address until one connects (uses [`PeerPool`] ban-on-connect-fail).
 #[cfg(feature = "std")]
 pub fn connect_first_peer(
     addrs: &[std::net::SocketAddr],
@@ -419,6 +447,8 @@ pub struct PeerPool {
     /// Ban duration for soft failures.
     ban_for: std::time::Duration,
     next: usize,
+    /// Last successfully connected peer (for ban-after-sync-error).
+    last_connected: Option<std::net::SocketAddr>,
 }
 
 #[cfg(feature = "std")]
@@ -430,6 +460,7 @@ impl PeerPool {
             banned: BTreeMap::new(),
             ban_for: std::time::Duration::from_secs(300),
             next: 0,
+            last_connected: None,
         }
     }
 
@@ -439,12 +470,34 @@ impl PeerPool {
             .insert(addr, std::time::Instant::now() + self.ban_for);
     }
 
+    /// Ban the last connected peer, if any.
+    pub fn ban_last_connected(&mut self) {
+        if let Some(addr) = self.last_connected {
+            self.ban(addr);
+        }
+    }
+
+    /// Last peer returned by [`Self::connect_next`].
+    pub fn last_connected(&self) -> Option<std::net::SocketAddr> {
+        self.last_connected
+    }
+
     /// Whether `addr` is currently banned.
     pub fn is_banned(&self, addr: std::net::SocketAddr) -> bool {
         match self.banned.get(&addr) {
             Some(until) => std::time::Instant::now() < *until,
             None => false,
         }
+    }
+
+    /// Number of configured peer addresses.
+    pub fn len(&self) -> usize {
+        self.addrs.len()
+    }
+
+    /// True when no addresses are configured.
+    pub fn is_empty(&self) -> bool {
+        self.addrs.is_empty()
     }
 
     /// Connect to the next non-banned peer (round-robin).
@@ -464,7 +517,10 @@ impl PeerPool {
                 continue;
             }
             match crate::lip0006_tcp::TcpMwebPeer::connect(&addr, network) {
-                Ok(p) => return Ok(p),
+                Ok(p) => {
+                    self.last_connected = Some(addr);
+                    return Ok(p);
+                }
                 Err(e) => {
                     self.ban(addr);
                     last_err = Some(e);
@@ -472,6 +528,48 @@ impl PeerPool {
             }
         }
         Err(last_err.unwrap_or_else(|| Error::Crypto("all peers banned or unreachable".into())))
+    }
+
+    /// Run `f` against a connected peer, ban+rotate on [`is_banworthy_peer_error`].
+    ///
+    /// Prefer this when the closure needs mid-pass state (e.g. checkpoint callbacks) that
+    /// cannot be expressed through [`MwebSyncer::run_once_with_pool`].
+    pub fn with_failover<R, F>(
+        &mut self,
+        network: bitcoin::Network,
+        mut f: F,
+    ) -> Result<R, Error>
+    where
+        F: FnMut(&mut crate::lip0006_tcp::TcpMwebPeer) -> Result<R, Error>,
+    {
+        let attempts = self.len().max(1);
+        let mut last_err = None;
+        for attempt in 0..attempts {
+            let mut peer = match self.connect_next(network) {
+                Ok(p) => p,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            };
+            match f(&mut peer) {
+                Ok(r) => return Ok(r),
+                Err(e) => {
+                    if is_banworthy_peer_error(&e) {
+                        self.ban_last_connected();
+                        eprintln!(
+                            "warn: banworthy sync error on attempt {}/{} ({e}); rotating peer",
+                            attempt + 1,
+                            attempts
+                        );
+                        last_err = Some(e);
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| Error::Crypto("MWEB sync failed on all peers".into())))
     }
 }
 
@@ -847,6 +945,8 @@ impl MwebSyncer {
     /// Between passes, waits via [`SyncNotifier::wait_tip_changed`] so idle tip loops do not
     /// busy-spin. For mid-pass persistence, callers should use [`Self::run_once`] with a
     /// checkpoint closure (as the CLI does).
+    ///
+    /// Prefer [`Self::run_loop_with_pool`] when the UTXO source is a rotating [`PeerPool`].
     pub fn run_loop<P, N, S, F>(
         &self,
         headers: &P,
@@ -886,6 +986,73 @@ impl MwebSyncer {
         }
         Ok(last)
     }
+
+    /// One differential sync pass with library-owned peer ban/rotate on hard failures.
+    ///
+    /// Connects via `pool`, runs [`Self::run_once`] (no mid-pass checkpoint — use
+    /// [`PeerPool::with_failover`] around [`Self::run_once`] when a checkpoint closure is
+    /// required). On [`is_banworthy_peer_error`] bans the peer and retries (up to
+    /// `pool.len()` attempts). Non-banworthy errors fail immediately without rotating.
+    #[cfg(feature = "std")]
+    pub fn run_once_with_pool<P, N>(
+        &self,
+        headers: &P,
+        notifier: &mut N,
+        pool: &mut PeerPool,
+        network: bitcoin::Network,
+        state: &mut SyncState,
+        keys: &MasterKeys,
+        book: &AddressBook,
+        db: &mut MwebCoinDatabase,
+        secp: &Secp256k1<All>,
+    ) -> Result<SyncResult, Error>
+    where
+        P: BlockHeaderProvider,
+        N: SyncNotifier,
+    {
+        pool.with_failover(network, |peer| {
+            self.run_once(
+                headers, notifier, peer, state, keys, book, db, secp, None,
+            )
+        })
+    }
+
+    /// Tip loop that reconnects via [`PeerPool`] each pass (ban/rotate on hard peer errors).
+    ///
+    /// Idles between successful passes with [`SyncNotifier::wait_tip_changed`]. Use
+    /// [`PollingTipNotifier`] (not [`ReadyNotifier`]) for continuous follow mode.
+    #[cfg(feature = "std")]
+    pub fn run_loop_with_pool<P, N, F>(
+        &self,
+        headers: &P,
+        notifier: &mut N,
+        pool: &mut PeerPool,
+        network: bitcoin::Network,
+        state: &mut SyncState,
+        keys: &MasterKeys,
+        book: &AddressBook,
+        db: &mut MwebCoinDatabase,
+        secp: &Secp256k1<All>,
+        mut should_stop: F,
+    ) -> Result<SyncResult, Error>
+    where
+        P: BlockHeaderProvider,
+        N: SyncNotifier,
+        F: FnMut() -> bool,
+    {
+        let mut last;
+        loop {
+            let tip_before = notifier.header_tip_height().unwrap_or(0);
+            last = self.run_once_with_pool(
+                headers, notifier, pool, network, state, keys, book, db, secp,
+            )?;
+            if should_stop() {
+                break;
+            }
+            notifier.wait_tip_changed(tip_before)?;
+        }
+        Ok(last)
+    }
 }
 
 #[cfg(test)]
@@ -902,6 +1069,23 @@ mod tests {
         let mut pool = PeerPool::new(vec![addr]);
         let _ = pool.connect_next(bitcoin::Network::Regtest);
         assert!(pool.is_banned(addr));
+    }
+
+    #[test]
+    fn banworthy_detects_leafset_and_timeout() {
+        assert!(is_banworthy_peer_error(&Error::Crypto(
+            "leafset_root mismatch".into()
+        )));
+        assert!(is_banworthy_peer_error(&Error::Crypto(
+            "read timed out".into()
+        )));
+        assert!(is_banworthy_peer_error(&Error::Crypto(
+            "output_root mismatch".into()
+        )));
+        assert!(!is_banworthy_peer_error(&Error::InsufficientFunds));
+        assert!(!is_banworthy_peer_error(&Error::Crypto(
+            "expected FULL_UTXO format".into()
+        )));
     }
 
     #[test]

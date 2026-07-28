@@ -36,6 +36,8 @@ pub const CHANGE_ADDRESS_INDEX: u32 = 0;
 /// Prefer [`crate::fund_mweb_spend`] → [`crate::sign_funded_mweb`] → extract for the
 /// ltcsuite in-PSBT happy path. This type remains for unit tests and migration helpers;
 /// do not treat [`Self::tx`]'s pre-built `mw_tx` as the PSBT source of truth.
+///
+/// Wallet facade marks `build_mweb_*` deprecated in favor of fund→sign→extract.
 #[derive(Debug, Clone)]
 pub struct FinishedMwebTx {
     /// Litecoin transaction with empty vin/vout and `mw_tx` set.
@@ -62,6 +64,9 @@ pub struct FinishedMwebPegin {
 }
 
 /// Builder for MWEB spends and peg-outs.
+///
+/// Prefer [`crate::fund_mweb_spend`] / [`crate::sign_funded_mweb`] for production sends.
+/// Kept for unit/regtest vectors; wallet `build_mweb_*` APIs are deprecated.
 #[derive(Debug, Default, Clone)]
 pub struct MwebTxBuilder {
     inputs: Vec<MwebCoin>,

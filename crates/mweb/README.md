@@ -4,19 +4,20 @@ MWEB primitives for the Litecoin BDK fork:
 
 - LIP-0004 / Litecoin Core stealth addresses
 - Core-compatible output rewind (`RewindOutput`) and `MwebCoinDatabase` (with `block_height`)
-- `MwebTxBuilder` for MWEB→MWEB spends and peg-outs
-- `build_pegin` / `FinishedMwebPegin` for BDK-authored peg-in bodies
+- In-PSBT fund/sign/scrub/extract (`fund_mweb_spend` / `sign_funded_mweb` → native
+  `Psbt::extract_tx_with_mweb` on `litecoin` 0.32.8-rc.2)
+- `build_pegin` / `FinishedMwebPegin` for BDK-authored peg-in bodies (extract via native maps)
 - MW `secp256k1-zkp` FFI: 675-byte bulletproofs + schnorr
 - Feature `persist`: parallel `ChangeSet` for file_store
 - Feature `rusqlite`: SQLite-beside-wallet tables
 - Feature `encrypt` / `encrypt-changeset`: ChaCha20-Poly1305 seal helpers
 - Feature `lip0006`: LIP-0006 codecs, `sync_mweb_utxos`, `mweb_sync::MwebSyncer`
-  (differential leafset + fine/tip-only dating, multi-peer failover)
-- `psbt` module: ltcsuite `0x90+` MWEB PSBT maps + `MwebPsbt` extract helpers (until upstream
-  `litecoin` PSBTv2)
+  (differential leafset + fine/tip-only dating, `PeerPool` ban/rotate)
+- `psbt` module: thin helpers over `bitcoin::psbt::mweb` (`MwebInput` / `MwebOutput` /
+  `MwebKernel`) until apps call the crate types directly
 
 Wallet integration (feature `mweb` on `bdk_wallet`): `CombinedBalance`, `MwebStore`,
-`prepare_mweb_pegin`, `build_mweb_send`, `build_mweb_pegout`.
+`prepare_mweb_pegin`, `fund_mweb_send`, `fund_mweb_pegout` (+ deprecated `build_mweb_*`).
 
 ## Parallel persistence
 

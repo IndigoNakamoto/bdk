@@ -39,8 +39,10 @@ MWEB_TIP_POLL_SECS=30 cargo run --example mainnet_mweb --features "mweb,file_sto
 
 - Run one or more non-pruned archive nodes behind DNS or a static allow-list
 - Ship `LITECOIN_P2P` (comma-separated) or future seed list in the app
-- Clients use [`PeerPool`](../crates/mweb/src/mweb_sync.rs) (round-robin + temporary ban on connect
-  fail / caller can `ban` after invalid leafset/PMMR). `connect_first_peer` remains as a thin wrapper.
+- Clients use [`PeerPool`](../crates/mweb/src/mweb_sync.rs): round-robin + temporary ban on
+  **connect fail**, **leafset/PMMR verify fail**, and **read timeout** via
+  `with_failover` / `MwebSyncer::run_once_with_pool` (`is_banworthy_peer_error`).
+  `connect_first_peer` remains as a thin wrapper.
 - Fine dating default window is **4000** (mwebsync); first CLI sync stays tip-only unless
   `MWEB_FINE_SYNC=1`.
 - Broadcast: for MWEB-only txs set `LITECOIN_RPC_URL` (cookie auth OK) **first**. Esplora often

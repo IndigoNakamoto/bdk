@@ -130,8 +130,8 @@ Architecture ADR: [`docs/MWEB_ARCHITECTURE.md`](docs/MWEB_ARCHITECTURE.md).
 - Crate [`crates/mweb`](crates/mweb) (`bdk_mweb`): Core-compatible stealth keys
   (`m/0'/100'/{0,1}'` + BLAKE3 `'A'` tweak), `Address::mweb` helpers, `rewind_output` /
   `MwebCoinDatabase`, `MwebTxBuilder` (MWEB→MWEB + peg-out), and `build_pegin`.
-- Wallet feature `mweb`: `balance_combined`, `prepare_mweb_pegin`, `build_mweb_send`,
-  `build_mweb_pegout` — caller still owns `MwebCoinDatabase`.
+- Wallet feature `mweb`: `balance_combined`, `prepare_mweb_pegin`, `fund_mweb_send`,
+  `fund_mweb_pegout` — caller still owns `MwebCoinDatabase`. (`build_mweb_*` deprecated.)
 - Feature `persist` on `bdk_mweb`: parallel `ChangeSet` for `bdk_file_store` and SQLite
   (`rusqlite` feature). Wallet `MwebStore` (feature `mweb` / `mweb-sqlite`) loads beside the
   wallet. **Not** part of `Wallet::ChangeSet`. Encrypt at rest with `encrypt` /
