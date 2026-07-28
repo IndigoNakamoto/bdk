@@ -45,6 +45,16 @@ impl TcpMwebPeer {
         Self::connect_sock(sock, sock.to_string(), network)
     }
 
+    /// Peer address string used for reconnect / [`crate::mweb_sync::PeerPool`] bans.
+    pub fn addr_string(&self) -> &str {
+        &self.addr
+    }
+
+    /// Parsed socket address when `addr` is `host:port` form.
+    pub fn socket_addr(&self) -> Option<std::net::SocketAddr> {
+        self.addr.parse().ok()
+    }
+
     fn connect_sock(
         sock: std::net::SocketAddr,
         addr_str: String,

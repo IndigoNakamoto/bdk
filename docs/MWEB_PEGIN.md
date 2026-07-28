@@ -34,7 +34,7 @@ Peg-ins are only safe to spend inside MWEB after **6 confirmations** (Litecoin C
 1. `FinishedMwebPegin = build_pegin(...)` → `kernel_id`, `pegin_amount`, `mw_tx`
 2. Transparent coin selection: `TxBuilder::apply_mweb_pegin(&pegin)` (feature `mweb`) or
    `add_mweb_pegin(kernel_id, amount)` + `mweb_tx(mw_tx)`
-3. `finish_mweb_pegin` → sign PSBT → `extract_tx` → `attach_mweb_tx` → broadcast
+3. `finish_mweb_pegin` → sign PSBT → `extract_pegin_with_mweb_psbt` → broadcast
 
 BIP174 still cannot carry `mw_tx`; the body stays aside until extract. Paying a stealth address with an empty SPK still yields **`MwebPegInRequiresKernel`**.
 
@@ -46,7 +46,7 @@ litecoind `sendtoaddress(<mweb>, X)` (or mwebd) remains a valid finalizer when y
 
 ```text
 generatetoaddress 431 <addr>   # pre-MWEB tip
-# BDK: build_pegin + transparent v9 + attach_mweb_tx + sendrawtransaction
+# BDK: build_pegin + transparent v9 + extract_pegin_with_mweb_psbt + sendrawtransaction
 # (or: sendtoaddress <tmweb1…> <amt> for Core finalize)
 generatetoaddress 1 <addr>     # height 432, MWEB active + confirms peg-in
 generatetoaddress 5 <addr>     # ≥6 confirmations total

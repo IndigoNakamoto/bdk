@@ -25,18 +25,27 @@ cd bdk_wallet
 cargo run --example mainnet_mweb --features "mweb,file_store,rusqlite" -- sync
 ```
 
-First sync uses **tip-only dating** by default (fast). For full fine-window dating:
+First sync uses **tip-only dating** by default (fast). After the first leafset is stored, the
+default fine window is **4000** (mwebsync). Overrides:
 
 ```bash
+# Force fine window 4000 even on first sync
 MWEB_FINE_SYNC=1 cargo run --example mainnet_mweb --features "mweb,file_store,rusqlite" -- sync
+# Tip-loop: idle until Esplora tip advances, then sync again (ban/failover on peer errors)
+MWEB_TIP_POLL_SECS=30 cargo run --example mainnet_mweb --features "mweb,file_store,rusqlite" -- sync --follow
 ```
 
 ## Product / vendor fleet
 
 - Run one or more non-pruned archive nodes behind DNS or a static allow-list
 - Ship `LITECOIN_P2P` (comma-separated) or future seed list in the app
-- Clients use `connect_first_peer` failover (no ban manager in MVP)
-- Broadcast: try Esplora, fall back to `LITECOIN_RPC_URL` for MWEB-only txs when explorers reject fees
+- Clients use [`PeerPool`](../crates/mweb/src/mweb_sync.rs) (round-robin + temporary ban on connect
+  fail / caller can `ban` after invalid leafset/PMMR). `connect_first_peer` remains as a thin wrapper.
+- Fine dating default window is **4000** (mwebsync); first CLI sync stays tip-only unless
+  `MWEB_FINE_SYNC=1`.
+- Broadcast: for MWEB-only txs set `LITECOIN_RPC_URL` (cookie auth OK) **first**. Esplora often
+  accepts an empty transparent shell (`txid` ignores `mw_tx`). Prefer **wtxid** + local
+  `sendrawtransaction`.
 
 ## Trust model
 

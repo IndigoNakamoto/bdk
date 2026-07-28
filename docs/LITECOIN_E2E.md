@@ -136,8 +136,9 @@ Electrum/Esplora/RPC → Wallet::apply_update / apply_block
   → persist MwebStore (+ optional mweb_sync.json SyncState)
 ```
 
-1. Author peg-in with `Wallet::prepare_mweb_pegin` (feature `mweb`), sign, `attach_mweb_tx`, broadcast
-   **before** mining MWEB activation (mempool peg-in required on regtest).
+1. Author peg-in with `Wallet::prepare_mweb_pegin` (feature `mweb`), sign,
+   `extract_pegin_with_mweb_psbt`, broadcast **before** mining MWEB activation (mempool peg-in
+   required on regtest).
 2. Mine peg-in maturity (`MWEB_PEGIN_MATURITY` = 6), sync transparent tip with `apply_block`.
 3. Optional reorg: `MwebStore::disconnect_from(fork_height)`.
 4. Verified LIP sync: `TcpMwebPeer::connect(env.p2p_addr(), …)` +
@@ -210,6 +211,20 @@ If Esplora rejects an MWEB-only broadcast, set `LITECOIN_RPC_URL` (+ `LITECOIN_R
   passes are incremental via `mweb_sync.json`. Tip-only dating is the default on empty SyncState.
 - Peer ops: [`MWEB_PEER_OPS.md`](MWEB_PEER_OPS.md).
 
+### Mainnet E2E loop (2026-07-27)
+
+| Step | Result |
+| --- | --- |
+| Baseline `sync` + `balance` | Transparent `0.00398650`; MWEB spendable `0.00006100` (leaf `347131`); tip `3149837`. |
+| Peg-in `0.001` (fee `50000`) | Tx [`dd5c2b03…`](https://litecoinspace.org/tx/dd5c2b03fe609fdc4ae65e8909b12c5a4155cb3cef20d889b7fa5459986b6853) via **Esplora** (`extract_pegin_with_mweb_psbt`). Kernel `52536241…`. Inclusion `3149838`; mature after 6 confs. |
+| Send → Nexus `0.0004` (fee `3900`) | Destination `ltcmweb1qqv6mpy9…`. Pure MWEB: **`txid` ignores `mw_tx`** (all empty-skeleton txs share `4ebd325a…`); identify by **wtxid**. On-chain: spent peg-in leaf, change `0.00006100` at height `3149847`. CLI now prefers `LITECOIN_RPC_URL` for MWEB-only. |
+| Receive ← Nexus | BDK address ready via `address` (e.g. idx 6 `ltcmweb1qqdqpp0…`). Pay from Nexus → `sync` / `scan-tx` (operator). |
+| Peg-out `0.00002` (fee `3900`) | HogEx credited BIP84 `ltc1q4caq8…`; transparent `+0.00002` (balance `0.00299650`). Remaining MWEB change `0.00000200` + prior send change. |
+
+**Broadcast lesson:** litecoinspace may show a 12-byte empty shell under the colliding MWEB `txid`. Use local `sendrawtransaction` + **wtxid**; see [`MWEB_PEER_OPS.md`](MWEB_PEER_OPS.md).
+
+CLI happy path uses `MwebPsbt` extract only (`attach_mweb_tx` deprecated).
+
 ## Notes
 
 - Litecoin testnet here is Litecoin Core's testnet4 directory layout, unrelated to Bitcoin BIP-94.
@@ -217,9 +232,10 @@ If Esplora rejects an MWEB-only broadcast, set `LITECOIN_RPC_URL` (+ `LITECOIN_R
 - **HogAddr (v8) / peg-in (v9)** bridge outs are never indexed as spendable UTXOs; **peg-out**
   p2wpkh/p2tr outs in the same HogEx still credit the wallet when watched.
 - MWEB stealth destinations (`ltcmweb1…` / `tmweb1…`) raise `CreateTxError::MwebPegInRequiresKernel`.
-  Peg-in: `Wallet::prepare_mweb_pegin` or `build_pegin` + `attach_mweb_tx` (Core finalize still OK).
+  Peg-in: `Wallet::prepare_mweb_pegin` + `extract_pegin_with_mweb_psbt` (Core finalize still OK).
 - Facade: `balance_combined` (confirmation buckets), `MwebStore`, `prepare_mweb_pegin`,
-  `build_mweb_send`, `build_mweb_pegout` (feature `mweb`). See [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md).
+  `fund_mweb_send` / `fund_mweb_pegout` → `sign_and_extract_funded_mweb`, plus legacy
+  `build_mweb_send` / `build_mweb_pegout` (feature `mweb`). See [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md).
 
 MWEB spend / peg / facade acceptance (needs `LITECOIND_EXE`):
 

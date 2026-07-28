@@ -21,8 +21,8 @@ alternate for peg-in, but BDK can author peg-in/out bodies itself (Phase 5).
 
 | Path | Role |
 | --- | --- |
-| **`attach_mweb_tx` after PSBT extract** | **Interim** spike / CLI (proven mainnet peg-in + Nexus send) |
-| **ltcsuite PSBTv2 MWEB fields** (`0x90+` input/output/kernel types) | **Reference** for library consumers — port into Rust `litecoin` + `bdk_wallet` |
+| **`fund_mweb_*` → `sign_funded_mweb` / `sign_mweb_components` → scrub → extract** (`mw_tx` at extract; `attach_mweb_tx` deprecated) | Happy-path CLI / facade (mainnet send + peg-out) |
+| **Typed `0x90+` maps in `bdk_mweb::psbt`** (staging for published `litecoin`) | Wire-interop shape; see [`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md) |
 
 Do **not** invent a parallel proprietary key scheme. Do **not** embed Go.
 
@@ -101,7 +101,8 @@ A_i = a·B_i
 
 ## Peg-in / spend / peg-out (summary)
 
-- **Peg-in:** `bdk_mweb::build_pegin` / wallet `prepare_mweb_pegin` → PSBT + `attach_mweb_tx`. See [`MWEB_PEGIN.md`](MWEB_PEGIN.md).
+- **Peg-in:** `bdk_mweb::build_pegin` / wallet `prepare_mweb_pegin` → PSBT +
+  `extract_pegin_with_mweb_psbt`. See [`MWEB_PEGIN.md`](MWEB_PEGIN.md).
 - **MWEB→MWEB:** `Wallet::build_mweb_send` → `MwebTxBuilder`; empty vin/vout Litecoin tx with `mw_tx`; no `IndexedTxGraph`.
 - **Peg-out:** `Wallet::build_mweb_pegout` → peg-out kernel; miner HogEx pays watched transparent SPKs.
 - **Balance:** `Wallet::balance_combined(&MwebCoinDatabase)` — caller still owns the MWEB DB.

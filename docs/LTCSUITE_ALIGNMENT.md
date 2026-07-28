@@ -1,7 +1,17 @@
 # ltcsuite alignment (reference inventory)
 
-Status: **Inventory complete** (2026-07-27). Per Losh: **copy ltcsuite PSBTv2 MWEB**; light sync follows **`mwebsync`**.  
+Status: **Inventory locked** (2026-07-27, re-verified vs ltcd `master` `ltcutil/psbt/types.go`).  
+Per Losh: **copy ltcsuite PSBTv2 MWEB**; light sync follows **`mwebsync`**.  
 Rust ports semantics into `litecoin` / `bdk_mweb` / `bdk_wallet` — **no Go FFI**.
+
+**Lock notes**
+
+- All `0x90+` / kernel type codes in [`crates/mweb/src/psbt.rs`](../crates/mweb/src/psbt.rs) match ltcd.
+- Finalize/extract must emit **stealth address** on outputs (`scan||spend`, 66 bytes) — see ltcd
+  `extractor.go` / `psbt.go` (`StealthAddress`).
+- BIP32 origins `0x9A` / `0x9B` are typed in BDK maps; population is optional until wallet exposes
+  master fingerprints (ltcwallet `populateMwebKeyOrigins`).
+- Upstream absorption checklist: [`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md).
 
 Canonical sources:
 
@@ -76,11 +86,11 @@ ltcwallet populates origins via `populateMwebKeyOrigins` / `validateMwebKeyOrigi
 
 | | BDK now | ltcsuite reference |
 | --- | --- | --- |
-| Container | Transparent PSBT + **`attach_mweb_tx` after extract** | **PSBTv2 with MWEB input/output/kernel maps** |
-| Sign path | `MwebTxBuilder` outside PSBT | `SignMwebComponents` inside PSBT |
-| Interop | Nexus saw raw broadcast only | Cross-wallet PSBT round-trip |
+| Container | Typed `0x90+` maps in `bdk_mweb::psbt` (staging for `litecoin`); `mw_tx` **extract-only** after fund/sign | Native PSBTv2 MWEB maps in `litecoin` |
+| Sign path | `fund_mweb_*` → `sign_mweb_components` → scrub → extract (ltcwallet-shaped) | `SignMwebComponents` inside PSBT |
+| Interop | Mainnet Nexus send proven; map round-trip + fund/sign unit tests | Cross-wallet PSBT round-trip |
 
-**Port target:** extend Rust `litecoin` PSBT (fork) with these types, then teach `bdk_wallet` fund/sign/finalize to match ltcwallet. Keep `attach_mweb_tx` as interim for the CLI until parity.
+**Port target:** merge staging types into published `litecoin` ([`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md)).
 
 ---
 
@@ -120,15 +130,14 @@ What already matches: LIP-0006 message order, leafset blake3, PMMR `output_root`
 
 ## 3. Ordered backlog
 
-1. ~~**PSBTv2 MWEB types**~~ — **MVP in `bdk_mweb::psbt`** (ltcd `0x90+` / kernel map codes +
-   `MwebPsbt` extract helpers). Upstream absorption into published `litecoin` crate still open.
-2. ~~**`bdk_wallet` extract path**~~ — CLI `pegin` / `send` / `pegout` use
-   `extract_pegin_with_mweb_psbt` / `extract_finished_mweb_tx` (attach helper retained).
-3. Deprecate library reliance on `attach_mweb_tx` after native PSBTv2 in `litecoin` crate.
-4. ~~**mwebsync-shaped syncer**~~ — MVP + harden: tip-only dating, coarse heights, reorg leafset
-   invalidate, `connect_first_peer` failover. Remaining: ban manager, mempool watch.
-5. Confirmation UX — heights set by syncer; buckets via `CombinedBalance`.
-6. Broadcast policy — Esplora then RPC; see [`MWEB_PEER_OPS.md`](MWEB_PEER_OPS.md).
+1. ~~**PSBTv2 MWEB types (staging)**~~ — locked vs ltcd; staging in `bdk_mweb::psbt`. Upstream
+   PR package: [`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md) (crates.io bump still open).
+2. ~~**In-PSBT fund/sign/finalize**~~ — `fund_mweb_*` + `sign_mweb_components` + scrub + extract.
+3. ~~**Deprecate `attach_mweb_tx` on happy path**~~ — marked `#[deprecated]`.
+4. ~~**mwebsync-shaped syncer**~~ — tip-loop wait, PeerPool ban, fine window 4000 default.
+5. ~~**Confirmation UX**~~ — CLI balance buckets + maturity copy.
+6. ~~**Broadcast policy**~~ — RPC-first for MWEB-only + wtxid; see [`MWEB_PEER_OPS.md`](MWEB_PEER_OPS.md).
+7. Mempool watch — deferred (wallet callback, not syncer).
 
 ---
 

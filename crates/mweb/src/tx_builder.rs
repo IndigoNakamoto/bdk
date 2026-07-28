@@ -32,6 +32,10 @@ use crate::scan::output_id;
 pub const CHANGE_ADDRESS_INDEX: u32 = 0;
 
 /// Finished MWEB spend (or peg-out) ready for broadcast.
+///
+/// Prefer [`crate::fund_mweb_spend`] → [`crate::sign_funded_mweb`] → extract for the
+/// ltcsuite in-PSBT happy path. This type remains for unit tests and migration helpers;
+/// do not treat [`Self::tx`]'s pre-built `mw_tx` as the PSBT source of truth.
 #[derive(Debug, Clone)]
 pub struct FinishedMwebTx {
     /// Litecoin transaction with empty vin/vout and `mw_tx` set.
@@ -40,6 +44,8 @@ pub struct FinishedMwebTx {
     pub change: Option<MwebCoin>,
     /// Output ids of spent inputs.
     pub spent_output_ids: Vec<[u8; 32]>,
+    /// Spent input coins (secrets for PSBT map population / [`crate::MwebPsbt::sign_mweb_components`]).
+    pub spent_coins: Vec<MwebCoin>,
 }
 
 /// Finished BDK-authored peg-in body (author `mw_tx` before the transparent v9 half).
@@ -140,6 +146,7 @@ impl MwebTxBuilder {
             tx,
             change: assembled.change,
             spent_output_ids: assembled.spent_output_ids,
+            spent_coins: self.inputs,
         })
     }
 }
@@ -578,7 +585,8 @@ pub fn create_kernel(
     })
 }
 
-fn shared_secret_and_spend_for_owned(
+/// Derive shared secret + spend key for an owned output (change / self-send).
+pub fn shared_secret_and_spend_for_owned(
     keys: &MasterKeys,
     index: u32,
     ke: &PublicKey,

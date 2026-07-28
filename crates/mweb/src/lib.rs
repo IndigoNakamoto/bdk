@@ -36,6 +36,7 @@ mod serde_util;
 #[cfg(feature = "rusqlite")]
 pub mod sqlite;
 pub mod psbt;
+pub mod psbt_fund;
 pub mod tx_builder;
 
 pub use address::{is_mweb_address, parse_mweb_address, receive_address};
@@ -51,6 +52,9 @@ pub use keys::{address_index_tweak, master_keys_from_seed, MasterKeyScheme, Mast
 pub use psbt::{
     MwebPsbt, MwebPsbtInput, MwebPsbtKernel, MwebPsbtOutput, MWEB_KERNEL_COUNT_TYPE,
     MWEB_TX_OFFSET_TYPE, MWEB_TX_STEALTH_OFFSET_TYPE,
+};
+pub use psbt_fund::{
+    change_from_funded, fund_mweb_spend, sign_funded_mweb, FundedMwebPsbt, StagedMwebOutput,
 };
 pub use scan::{
     output_id, rewind_output, scan_litecoin_tx, scan_litecoin_tx_at, scan_mweb_tx, scan_mweb_tx_at,

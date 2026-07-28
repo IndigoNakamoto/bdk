@@ -22,9 +22,11 @@ use crate::p2p::{GetMwebUtxos, OUTPUT_FORMAT_FULL};
 use crate::pmmr::{verify_leafset, verify_utxo_batch};
 use crate::scan::{scan_utxo_entries_at, AddressBook};
 
-/// Fine stratified window: sample every height in the last N blocks (mwebsync uses 4000;
-/// default MVP uses 500).
-pub const FINE_WINDOW: u32 = 500;
+/// Fine stratified window: sample every height in the last N blocks (matches mwebsync).
+pub const FINE_WINDOW: u32 = 4000;
+
+/// Smaller fine window for constrained first-pass experiments (CLI may override).
+pub const FINE_WINDOW_FAST: u32 = 500;
 
 /// Coarse stratified stride (heights sampled every N blocks).
 pub const COARSE_STRIDE: u32 = 100;
@@ -158,6 +160,12 @@ pub trait SyncNotifier {
     fn wait_headers_synced(&mut self) -> Result<(), Error>;
     /// Current transparent tip height.
     fn header_tip_height(&self) -> Result<u32, Error>;
+    /// Block until the transparent tip moves past `prev_height` (tip-loop idle).
+    ///
+    /// Default: return immediately (one-shot / tests). Product notifiers should sleep/poll.
+    fn wait_tip_changed(&mut self, _prev_height: u32) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 /// Notifier that assumes headers are already synced.
@@ -174,6 +182,60 @@ impl SyncNotifier for ReadyNotifier {
 
     fn header_tip_height(&self) -> Result<u32, Error> {
         Ok(self.tip_height)
+    }
+}
+
+/// Tip notifier that polls a height callback until the tip advances (mobile tip-loop idle).
+#[cfg(feature = "std")]
+pub struct PollingTipNotifier<F>
+where
+    F: FnMut() -> Result<u32, Error>,
+{
+    /// Returns the current transparent tip height.
+    pub tip_fn: F,
+    /// Sleep between polls.
+    pub poll: std::time::Duration,
+    /// Last observed tip (updated on each poll).
+    pub tip_height: u32,
+}
+
+#[cfg(feature = "std")]
+impl<F> PollingTipNotifier<F>
+where
+    F: FnMut() -> Result<u32, Error>,
+{
+    /// Construct with an initial tip height and poll interval.
+    pub fn new(tip_height: u32, poll: std::time::Duration, tip_fn: F) -> Self {
+        Self {
+            tip_fn,
+            poll,
+            tip_height,
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl<F> SyncNotifier for PollingTipNotifier<F>
+where
+    F: FnMut() -> Result<u32, Error>,
+{
+    fn wait_headers_synced(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn header_tip_height(&self) -> Result<u32, Error> {
+        Ok(self.tip_height)
+    }
+
+    fn wait_tip_changed(&mut self, prev_height: u32) -> Result<(), Error> {
+        loop {
+            let h = (self.tip_fn)()?;
+            self.tip_height = h;
+            if h > prev_height {
+                return Ok(());
+            }
+            std::thread::sleep(self.poll);
+        }
     }
 }
 
@@ -199,6 +261,13 @@ impl FixedHeaderProvider {
             hashes,
         }
     }
+
+    /// Refresh tip fields (keeps prior fine-window hashes).
+    pub fn set_tip(&mut self, tip_hash: BlockHash, tip_height: u32) {
+        self.tip_hash = tip_hash;
+        self.tip_height = tip_height;
+        self.hashes.insert(tip_height, tip_hash);
+    }
 }
 
 impl BlockHeaderProvider for FixedHeaderProvider {
@@ -210,6 +279,43 @@ impl BlockHeaderProvider for FixedHeaderProvider {
         self.hashes.get(&height).copied().ok_or_else(|| {
             Error::Crypto(format!("FixedHeaderProvider: no hash for height {height}"))
         })
+    }
+}
+
+/// Live tip provider: re-queries tip / hashes on each call (not a frozen snapshot).
+pub struct LiveHeaderProvider<T, H>
+where
+    T: Fn() -> Result<(BlockHash, u32), Error>,
+    H: Fn(u32) -> Result<BlockHash, Error>,
+{
+    /// Returns current `(tip_hash, tip_height)`.
+    pub tip_fn: T,
+    /// Returns block hash at height.
+    pub hash_fn: H,
+}
+
+impl<T, H> LiveHeaderProvider<T, H>
+where
+    T: Fn() -> Result<(BlockHash, u32), Error>,
+    H: Fn(u32) -> Result<BlockHash, Error>,
+{
+    /// Construct from tip and per-height hash callbacks.
+    pub fn new(tip_fn: T, hash_fn: H) -> Self {
+        Self { tip_fn, hash_fn }
+    }
+}
+
+impl<T, H> BlockHeaderProvider for LiveHeaderProvider<T, H>
+where
+    T: Fn() -> Result<(BlockHash, u32), Error>,
+    H: Fn(u32) -> Result<BlockHash, Error>,
+{
+    fn tip(&self) -> Result<(BlockHash, u32), Error> {
+        (self.tip_fn)()
+    }
+
+    fn block_hash_at(&self, height: u32) -> Result<BlockHash, Error> {
+        (self.hash_fn)(height)
     }
 }
 
@@ -300,17 +406,73 @@ pub fn connect_first_peer(
     addrs: &[std::net::SocketAddr],
     network: bitcoin::Network,
 ) -> Result<crate::lip0006_tcp::TcpMwebPeer, Error> {
-    if addrs.is_empty() {
-        return Err(Error::Crypto("no LIP-0006 peer addresses".into()));
-    }
-    let mut last_err = None;
-    for addr in addrs {
-        match crate::lip0006_tcp::TcpMwebPeer::connect(addr, network) {
-            Ok(p) => return Ok(p),
-            Err(e) => last_err = Some(e),
+    PeerPool::new(addrs.to_vec()).connect_next(network)
+}
+
+/// Simple multi-peer pool with temporary bans (invalid proof / timeout / connect fail).
+#[cfg(feature = "std")]
+#[derive(Debug, Clone)]
+pub struct PeerPool {
+    addrs: Vec<std::net::SocketAddr>,
+    /// Banned until `Instant` (std time).
+    banned: BTreeMap<std::net::SocketAddr, std::time::Instant>,
+    /// Ban duration for soft failures.
+    ban_for: std::time::Duration,
+    next: usize,
+}
+
+#[cfg(feature = "std")]
+impl PeerPool {
+    /// Create a pool from peer addresses (order = preference).
+    pub fn new(addrs: Vec<std::net::SocketAddr>) -> Self {
+        Self {
+            addrs,
+            banned: BTreeMap::new(),
+            ban_for: std::time::Duration::from_secs(300),
+            next: 0,
         }
     }
-    Err(last_err.unwrap_or_else(|| Error::Crypto("peer connect failed".into())))
+
+    /// Ban `addr` for the configured duration (e.g. after PMMR / leafset failure).
+    pub fn ban(&mut self, addr: std::net::SocketAddr) {
+        self.banned
+            .insert(addr, std::time::Instant::now() + self.ban_for);
+    }
+
+    /// Whether `addr` is currently banned.
+    pub fn is_banned(&self, addr: std::net::SocketAddr) -> bool {
+        match self.banned.get(&addr) {
+            Some(until) => std::time::Instant::now() < *until,
+            None => false,
+        }
+    }
+
+    /// Connect to the next non-banned peer (round-robin).
+    pub fn connect_next(
+        &mut self,
+        network: bitcoin::Network,
+    ) -> Result<crate::lip0006_tcp::TcpMwebPeer, Error> {
+        if self.addrs.is_empty() {
+            return Err(Error::Crypto("no LIP-0006 peer addresses".into()));
+        }
+        let n = self.addrs.len();
+        let mut last_err = None;
+        for _ in 0..n {
+            let addr = self.addrs[self.next % n];
+            self.next = self.next.wrapping_add(1);
+            if self.is_banned(addr) {
+                continue;
+            }
+            match crate::lip0006_tcp::TcpMwebPeer::connect(&addr, network) {
+                Ok(p) => return Ok(p),
+                Err(e) => {
+                    self.ban(addr);
+                    last_err = Some(e);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| Error::Crypto("all peers banned or unreachable".into())))
+    }
 }
 
 /// mwebsync-shaped syncer over a single [`MwebUtxoSource`].
@@ -681,6 +843,10 @@ impl MwebSyncer {
     }
 
     /// Call [`Self::run_once`] until `should_stop` returns true (checked after each pass).
+    ///
+    /// Between passes, waits via [`SyncNotifier::wait_tip_changed`] so idle tip loops do not
+    /// busy-spin. For mid-pass persistence, callers should use [`Self::run_once`] with a
+    /// checkpoint closure (as the CLI does).
     pub fn run_loop<P, N, S, F>(
         &self,
         headers: &P,
@@ -701,6 +867,7 @@ impl MwebSyncer {
     {
         let mut last;
         loop {
+            let tip_before = notifier.header_tip_height().unwrap_or(0);
             last = self.run_once(
                 headers,
                 notifier,
@@ -715,6 +882,7 @@ impl MwebSyncer {
             if should_stop() {
                 break;
             }
+            notifier.wait_tip_changed(tip_before)?;
         }
         Ok(last)
     }
@@ -726,6 +894,44 @@ mod tests {
     use crate::coin_db::MwebCoin;
     use crate::p2p::MwebLeafset;
     use bitcoin::hashes::Hash;
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn peer_pool_bans_failed_connect() {
+        let addr: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let mut pool = PeerPool::new(vec![addr]);
+        let _ = pool.connect_next(bitcoin::Network::Regtest);
+        assert!(pool.is_banned(addr));
+    }
+
+    #[test]
+    fn fine_window_matches_mwebsync_default() {
+        assert_eq!(FINE_WINDOW, 4000);
+        assert_eq!(FINE_WINDOW_FAST, 500);
+    }
+
+    #[test]
+    fn live_header_provider_refreshes_tip() {
+        use core::cell::Cell;
+        let height = Cell::new(10u32);
+        let hash_a = BlockHash::from_byte_array([1u8; 32]);
+        let hash_b = BlockHash::from_byte_array([2u8; 32]);
+        let provider = LiveHeaderProvider::new(
+            || {
+                let h = height.get();
+                let hash = if h > 10 { hash_b } else { hash_a };
+                Ok((hash, h))
+            },
+            |h| Ok(BlockHash::from_byte_array([h as u8; 32])),
+        );
+        assert_eq!(provider.tip().unwrap(), (hash_a, 10));
+        height.set(11);
+        assert_eq!(provider.tip().unwrap(), (hash_b, 11));
+        assert_eq!(
+            provider.block_hash_at(11).unwrap(),
+            BlockHash::from_byte_array([11u8; 32])
+        );
+    }
 
     #[test]
     fn diff_detects_added_and_removed() {
