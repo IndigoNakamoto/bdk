@@ -192,20 +192,22 @@ pub fn secret_mul(a: &[u8; 32], b: &[u8; 32]) -> Result<[u8; 32], Error> {
 #[cfg(feature = "zkp")]
 pub mod mw {
     use super::Error;
+    use alloc::boxed::Box;
+    use alloc::vec::Vec;
+    use once_cell::race::OnceBox;
     use secp256k1zkp::pedersen::{Commitment, RangeProof};
     use secp256k1zkp::{
         aggsig, ffi, ContextFlag, Message, PublicKey as GrinPk, Secp256k1, SecretKey as GrinSk,
         Signature,
     };
-    use std::sync::OnceLock;
 
     fn secp() -> &'static Secp256k1 {
-        static SECP: OnceLock<Secp256k1> = OnceLock::new();
-        SECP.get_or_init(|| Secp256k1::with_caps(ContextFlag::Commit))
+        static SECP: OnceBox<Secp256k1> = OnceBox::new();
+        SECP.get_or_init(|| Box::new(Secp256k1::with_caps(ContextFlag::Commit)))
     }
 
     fn sign_ctx() -> *mut ffi::Context {
-        static CTX: OnceLock<usize> = OnceLock::new();
+        static CTX: OnceBox<usize> = OnceBox::new();
         let p = *CTX.get_or_init(|| {
             let ctx = unsafe {
                 ffi::secp256k1_context_create(
@@ -213,7 +215,7 @@ pub mod mw {
                 )
             };
             assert!(!ctx.is_null());
-            ctx as usize
+            Box::new(ctx as usize)
         });
         p as *mut ffi::Context
     }
@@ -396,18 +398,16 @@ pub mod mw {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "zkp"))]
 mod tests {
     use super::*;
     use bitcoin::secp256k1::Secp256k1;
 
-    #[cfg(feature = "zkp")]
     #[test]
     fn bulletproof_roundtrip_smoke() {
         mw::bulletproof_roundtrip(42).expect("bulletproof FFI smoke");
     }
 
-    #[cfg(feature = "zkp")]
     #[test]
     fn schnorr_sign_verify_roundtrip() {
         let secp = Secp256k1::new();
@@ -418,7 +418,6 @@ mod tests {
         assert!(schnorr_verify(&sig, &pk, &msg).unwrap());
     }
 
-    #[cfg(feature = "zkp")]
     #[test]
     fn switch_commit_is_deterministic() {
         let secp = Secp256k1::new();

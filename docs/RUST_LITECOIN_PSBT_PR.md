@@ -4,6 +4,9 @@ Status: **PR open** — https://github.com/rust-litecoin/rust-litecoin/pull/9
 Local branch: `mweb-psbt-typed-maps` (fork `IndigoNakamoto/rust-litecoin`)  
 BDK consumes via path patch until crates.io has **0.32.8-rc.2**.
 
+`hex_array_opt` must `use crate::prelude::*` so `Vec` resolves under
+`--no-default-features --features serde` (no-std).
+
 **Remaining for distribution (crates.io owner):**
 
 ```bash

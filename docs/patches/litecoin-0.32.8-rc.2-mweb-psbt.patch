@@ -2132,6 +2132,8 @@ index c58598f..aff4961 100644
 +
 +    use hex::{DisplayHex, FromHex};
 +
++    use crate::prelude::*;
++
 +    macro_rules! define_opt_array {
 +        ($mod_name:ident, $len:expr) => {
 +            pub mod $mod_name {

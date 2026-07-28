@@ -32,6 +32,9 @@ criterion = { version = "0.7" }
 
 [features]
 default = ["std", "miniscript"]
+# Forward `no-std` for the 12.x Litecoin miniscript fork (requires std XOR no-std).
+# Safe alongside `std` → `miniscript?/std` when both features are enabled.
+miniscript = ["dep:miniscript", "miniscript/no-std"]
 std = ["bitcoin/std", "miniscript?/std", "bdk_core/std"]
 serde = ["dep:serde", "bitcoin/serde", "miniscript?/serde", "bdk_core/serde"]
 hashbrown = ["bdk_core/hashbrown"]

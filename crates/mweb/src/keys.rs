@@ -172,6 +172,7 @@ pub fn master_keys_from_seed(seed: &[u8], network: Network) -> Result<MasterKeys
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
     use bitcoin::secp256k1::Secp256k1;
 
     #[test]

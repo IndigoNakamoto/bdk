@@ -291,10 +291,13 @@ mod tests {
     use crate::hash::blake3_hash;
     use crate::keys::{MasterKeyScheme, MasterKeys};
     use crate::tx_builder::create_output_with_sender;
+    use alloc::string::ToString;
     use bitcoin::bip32::{DerivationPath, Fingerprint};
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::{Network, NetworkKind};
     use hex_conservative::FromHex;
+
+    extern crate std;
 
     const KEYCHAIN_SEED: &str = "2a64df085eefedd8bfdbb33176b5ba2e62e8be8b56c8837795598bb6c440c064";
 

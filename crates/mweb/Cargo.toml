@@ -18,6 +18,7 @@ bitcoin = { package = "litecoin", version = "0.32.8-rc.2", default-features = fa
 blake3 = { version = "1.5", default-features = false }
 # MW-compatible secp256k1-zkp (bulletproof 675 + schnorrsig/aggsig). Not Elements CT rangeproofs.
 grin_secp256k1zkp = { version = "0.7.15", optional = true, default-features = false, features = ["bullet-proof-sizing"] }
+once_cell = { version = "1.19", optional = true, default-features = false, features = ["alloc"] }
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
 serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
 bdk_core = { path = "../core", version = "0.6.2", optional = true, default-features = false }
@@ -38,7 +39,7 @@ rusqlite = { version = "0.31.0", features = ["bundled"] }
 default = ["std", "zkp"]
 std = ["bitcoin/std", "bitcoin/rand-std", "blake3/std", "bdk_core?/std"]
 # Grin/Litecoin MW secp256k1-zkp (bulletproofs + schnorr). Required for spend authoring.
-zkp = ["dep:grin_secp256k1zkp"]
+zkp = ["dep:grin_secp256k1zkp", "dep:once_cell"]
 # Serde for MwebCoin (and ChangeSet when combined with `persist`).
 serde = ["dep:serde", "bitcoin/serde"]
 # Parallel persistence: serde + bdk_core::Merge ChangeSet for file_store / SQLite-beside-wallet.
@@ -67,3 +68,7 @@ required-features = ["lip0006", "zkp"]
 [[test]]
 name = "lip0006_p2p"
 required-features = ["lip0006", "zkp"]
+
+[[example]]
+name = "verify_mainnet_batch"
+required-features = ["lip0006"]
