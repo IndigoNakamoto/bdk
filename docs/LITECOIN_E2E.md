@@ -240,6 +240,22 @@ Operator on Foundation Nexus phone; agent drove `mainnet_mweb` against local arc
 
 **Ops notes:** Fine-window sync (4000 Esplora hashes) is too slow for interactive runs — prefer `MWEB_FINE_SYNC=tip`. Marking coins spent before confirm + evaporated mempool view required wiping `mweb.db` / `mweb_sync.json` and full tip resync to recover; next tip sync then saw `spent=1` and change.
 
+### Mainnet E2E loop (2026-07-28 — full Nexus ↔ BDK round-trip)
+
+Operator on Foundation Nexus phone; agent drove `mainnet_spend` / `mainnet_mweb` against local archive litecoind (`LITECOIN_P2P` / `LITECOIN_RPC_URL` cookie). Baseline tip ~`3150308`; transparent `0.00298650`; MWEB spendable `0.00408500`.
+
+| Step | Result |
+| --- | --- |
+| Transparent BDK → Nexus `0.001` | Tx [`6c47ce79…`](https://litecoinspace.org/tx/6c47ce792c1e2ab463ec1bb3f6a2b696116a56712544efb1b88f133eb5b388b8) → `ltc1q6t4ulgvyd2q7c8n2qud3ffv6ugmznmcavr6phu` (fee 141 lit). `mainnet_spend --to/--amount` used. |
+| Transparent Nexus → BDK `0.001` | Tx [`0bfd6404…`](https://litecoinspace.org/tx/0bfd64041e18a14fd2bb96e93a3061618ed8d430cdfd49f943b7f6cd14a7b536) → `ltc1qplp0mpg2ec6nzkkv25erghmnq6x3ast58metuj`. |
+| Peg-in `0.001` | Tx [`912414f1…`](https://litecoinspace.org/tx/912414f11d0d58035e51bece3a21d7bd9da84352aa12c458d002ba732cbcb032); mature after 6 confs. |
+| MWEB BDK → Nexus `0.0004` (fee `3900`) | Dest `ltcmweb1qqveu…`. **wtxid** `1ce1ea992bd4b417e13e0643f4f3b79e194529a7ccb2dfadfcc4878c06aa8f09`. |
+| MWEB Nexus → BDK `0.0005` | BDK addr `ltcmweb1qqtjnp65…`; tip-only LIP sync (`MWEB_FINE_SYNC=tip`) ingested leaf `347815` @ `3150526`. |
+| Peg-out `0.001` (fee `3900`) | **wtxid** `420ecc76…` → `ltc1qet6lp8uy6xjnzdf8mugp0pr0zulnkd8yeurcxm` (HogEx credit). |
+| Final | Transparent `0.00296509`; MWEB spendable `0.00114600`; tip `3150528`. |
+
+**Ops notes:** Prefer cookie RPC user/`__cookie__` + password over embedding cookie in `LITECOIN_RPC_URL` for some shells. Dust peg-in fee failures need a lower absolute fee / larger amount. Interactive loop proven for transparent send/receive and MWEB peg-in → send → receive → peg-out.
+
 ## Notes
 
 - Litecoin testnet here is Litecoin Core's testnet4 directory layout, unrelated to Bitcoin BIP-94.
@@ -247,7 +263,7 @@ Operator on Foundation Nexus phone; agent drove `mainnet_mweb` against local arc
 - **HogAddr (v8) / peg-in (v9)** bridge outs are never indexed as spendable UTXOs; **peg-out**
   p2wpkh/p2tr outs in the same HogEx still credit the wallet when watched.
 - MWEB stealth destinations (`ltcmweb1…` / `tmweb1…`) raise `CreateTxError::MwebPegInRequiresKernel`.
-  Peg-in: `Wallet::prepare_mweb_pegin` + `extract_pegin_with_mweb_psbt` (Core finalize still OK).
+  Peg-in: `Wallet::prepare_mweb_pegin` + `extract_prepared_mweb_pegin` (maps-first; Core finalize still OK).
 - Facade: `balance_combined` (confirmation buckets), `MwebStore`, `prepare_mweb_pegin`,
   `fund_mweb_send` / `fund_mweb_pegout` → `sign_and_extract_funded_mweb` on native
   `litecoin` 0.32.8-rc.2 PSBT maps (feature `mweb`). Legacy `build_mweb_*` deprecated.
