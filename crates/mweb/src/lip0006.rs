@@ -45,6 +45,27 @@ pub trait MwebUtxoSource {
     fn get_leafset(&mut self, block_hash: BlockHash) -> Result<MwebLeafset, Error>;
     /// Fetch a batch of FULL_UTXO entries.
     fn get_utxos(&mut self, req: GetMwebUtxos) -> Result<MwebUtxos, Error>;
+
+    /// Fetch several UTXO batches, invoking `on_batch` for each response in request order.
+    ///
+    /// The default implementation is sequential. Transports that support request
+    /// pipelining (e.g. [`crate::lip0006_tcp::TcpMwebPeer`]) should send all requests
+    /// upfront and stream the responses, so the peer builds the next batch while the
+    /// caller verifies and scans the previous one.
+    ///
+    /// On error, some batches may already have been delivered to `on_batch`; the caller
+    /// is expected to resume from its own cursor. Implementations must leave the
+    /// transport in a clean state (no queued responses) before returning an error.
+    fn get_utxos_pipelined(
+        &mut self,
+        reqs: &[GetMwebUtxos],
+        on_batch: &mut dyn FnMut(MwebUtxos) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        for req in reqs {
+            on_batch(self.get_utxos(req.clone())?)?;
+        }
+        Ok(())
+    }
 }
 
 /// Result of a LIP-0006 sync pass.

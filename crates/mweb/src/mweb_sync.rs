@@ -20,7 +20,7 @@ use crate::keys::MasterKeys;
 use crate::lip0006::{
     verify_parent_hashes_present, MwebUtxoSource, SyncResult, VerifyMode, DEFAULT_UTXO_BATCH,
 };
-use crate::p2p::{GetMwebUtxos, OUTPUT_FORMAT_FULL};
+use crate::p2p::{GetMwebUtxos, MwebUtxos, OUTPUT_FORMAT_FULL};
 use crate::pmmr::{verify_leafset, verify_utxo_batch};
 use crate::scan::{scan_utxo_entries_at, AddressBook};
 
@@ -85,6 +85,30 @@ pub fn diff_leafsets(old: &[u8], new: &[u8]) -> LeafsetDiff {
 
 /// How often [`MwebSyncer::run_once`] invokes the optional checkpoint callback.
 pub const CHECKPOINT_EVERY_BATCHES: usize = 50;
+
+/// Observable progress of the UTXO download phase of [`MwebSyncer::run_once`].
+///
+/// Attach a clone of an `Arc<SyncProgress>` via [`MwebSyncer::progress`] and read the
+/// atomics from another thread (e.g. a UI progress bar polled during a sync pass).
+/// `total` is set and `fetched` reset when the download phase of a pass begins.
+#[derive(Debug, Default)]
+pub struct SyncProgress {
+    /// Added leaves fetched so far in the current pass.
+    pub fetched: core::sync::atomic::AtomicU64,
+    /// Total added leaves the current pass will fetch.
+    pub total: core::sync::atomic::AtomicU64,
+}
+
+impl SyncProgress {
+    /// `(fetched, total)` snapshot of the current pass.
+    pub fn snapshot(&self) -> (u64, u64) {
+        use core::sync::atomic::Ordering;
+        (
+            self.fetched.load(Ordering::Relaxed),
+            self.total.load(Ordering::Relaxed),
+        )
+    }
+}
 
 /// Persistent / in-memory sync cursor (leafset snapshot + height→leaf map).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -204,6 +228,8 @@ pub fn is_banworthy_peer_error(err: &Error) -> bool {
                 || m.contains("broken pipe")
                 || m.contains("reset by peer")
                 || m.contains("eof")
+                // read_exact on a peer-closed socket: "failed to fill whole buffer"
+                || m.contains("fill whole buffer")
                 || m.contains("i/o")
                 || m.contains("io error")
         }
@@ -580,6 +606,8 @@ pub struct MwebSyncer {
     pub dating: DatingMode,
     /// When set, also sample coarse heights from this floor to tip (stride [`COARSE_STRIDE`]).
     pub coarse_from_height: Option<u32>,
+    /// When set, per-batch UTXO download progress is published here (see [`SyncProgress`]).
+    pub progress: Option<alloc::sync::Arc<SyncProgress>>,
 }
 
 impl Default for MwebSyncer {
@@ -590,6 +618,7 @@ impl Default for MwebSyncer {
             fine_window: FINE_WINDOW,
             dating: DatingMode::FineWindow,
             coarse_from_height: None,
+            progress: None,
         }
     }
 }
@@ -688,9 +717,19 @@ impl MwebSyncer {
         let (tip_hash, tip_height) = headers.tip()?;
 
         // Reorg / tip divergence: clear dated heights and force a fresh leafset baseline.
+        // A pure chain extension (previous synced tip still on the current chain at its
+        // height) keeps the leafset snapshot so the diff only covers new leaves, instead
+        // of re-downloading the full UTXO set on every new block.
         let tip_changed = state.tip_hash.is_some_and(|h| h != tip_hash);
         let tip_shorter = state.tip_height.is_some_and(|prev| tip_height + 1 < prev);
-        if tip_shorter || tip_changed {
+        let extends_prev = !tip_shorter
+            && match (state.tip_hash, state.tip_height) {
+                (Some(prev_hash), Some(prev_height)) if prev_height <= tip_height => headers
+                    .block_hash_at(prev_height)
+                    .is_ok_and(|h| h == prev_hash),
+                _ => false,
+            };
+        if (tip_shorter || tip_changed) && !extends_prev {
             if tip_shorter {
                 db.disconnect_from(tip_height.saturating_add(1));
             } else if tip_changed {
@@ -772,6 +811,15 @@ impl MwebSyncer {
         let remaining = indices.len().saturating_sub(idx_i);
         let batch_size = self.batch_size.max(1) as usize;
         let approx_batches = remaining.div_ceil(batch_size).max(1);
+        let idx_start = idx_i;
+        let publish_progress = |consumed: usize| {
+            if let Some(p) = &self.progress {
+                use core::sync::atomic::Ordering;
+                p.total.store(remaining as u64, Ordering::Relaxed);
+                p.fetched.store(consumed as u64, Ordering::Relaxed);
+            }
+        };
+        publish_progress(0);
         #[cfg(feature = "std")]
         {
             if let Some(c) = resume_cursor {
@@ -790,6 +838,98 @@ impl MwebSyncer {
         let mut batch_i = 0usize;
         // Prefer large requests; some wide PMMR segments fail verify — then halve.
         let mut req_size = self.batch_size.max(1);
+
+        // Fast path for full syncs (empty prior leafset): every unspent leaf is in
+        // `added`, so the request schedule is deterministic upfront — batch k starts
+        // exactly at the first leaf of chunk k. Pipeline the whole schedule so the peer
+        // builds the next batch while we verify + scan the previous one. Any verify /
+        // transport / schedule error falls back to the sequential loop below, which
+        // resumes after `state.utxo_cursor`.
+        if state.leafset.is_empty() && idx_i < indices.len() {
+            let schedule: Vec<GetMwebUtxos> = indices[idx_i..]
+                .chunks(batch_size)
+                .map(|chunk| GetMwebUtxos {
+                    block_hash: tip_hash,
+                    start_index: chunk[0],
+                    num_requested: req_size,
+                    output_format: OUTPUT_FORMAT_FULL,
+                })
+                .collect();
+            let pipeline_res = {
+                let mut on_batch = |batch: MwebUtxos| -> Result<(), Error> {
+                    if batch.output_format != OUTPUT_FORMAT_FULL {
+                        return Err(Error::Crypto("expected FULL_UTXO format".into()));
+                    }
+                    if batch.utxos.is_empty() {
+                        // Nothing at/after this start; skip one index (tail case). A
+                        // mid-schedule gap desynchronizes and errors on the next batch.
+                        idx_i += 1;
+                        publish_progress(idx_i - idx_start);
+                        return Ok(());
+                    }
+                    if idx_i >= indices.len() || batch.start_index != indices[idx_i] {
+                        return Err(Error::Crypto(
+                            "pipelined UTXO schedule out of sync".into(),
+                        ));
+                    }
+                    batch_i += 1;
+                    #[cfg(feature = "std")]
+                    if batch_i == 1 || batch_i % 10 == 0 {
+                        eprintln!(
+                            "  utxo batch {batch_i}/~{approx_batches} (pipelined, start_leaf={}, remaining={})",
+                            batch.start_index,
+                            indices.len() - idx_i
+                        );
+                    }
+                    match self.verify {
+                        VerifyMode::Trusted => verify_parent_hashes_present(&batch)?,
+                        VerifyMode::HeaderAndPmmr => {
+                            let hdr = mweb_header.as_ref().expect("header fetched");
+                            verify_utxo_batch(&batch, &leafset, hdr)?;
+                        }
+                    }
+                    let mut entries: Vec<(u64, Output)> = Vec::new();
+                    for entry in &batch.utxos {
+                        if !added_set.contains(&entry.leaf_index) {
+                            continue;
+                        }
+                        let oid = crate::scan::output_id(&entry.output);
+                        all_fetched_ids.insert(oid);
+                        entries.push((entry.leaf_index, entry.output.clone()));
+                    }
+                    let last_leaf = batch
+                        .utxos
+                        .last()
+                        .map(|e| e.leaf_index)
+                        .unwrap_or(batch.start_index);
+                    let found = scan_utxo_entries_at(keys, book, &entries, db, secp, |leaf| {
+                        Some(date_leaf_index(&height_map, leaf, tip_height))
+                    })?;
+                    result.found.extend(found);
+                    result.downloaded = result.downloaded.saturating_add(batch.utxos.len());
+                    while idx_i < indices.len() && indices[idx_i] <= last_leaf {
+                        idx_i += 1;
+                    }
+                    state.utxo_cursor = Some(last_leaf);
+                    publish_progress(idx_i - idx_start);
+                    let done = idx_i >= indices.len();
+                    let should_checkpoint = checkpoint.is_some()
+                        && (batch_i == 1 || batch_i % CHECKPOINT_EVERY_BATCHES == 0 || done);
+                    if should_checkpoint {
+                        if let Some(cb) = checkpoint.as_mut() {
+                            cb(state, db);
+                        }
+                    }
+                    Ok(())
+                };
+                source.get_utxos_pipelined(&schedule, &mut on_batch)
+            };
+            #[cfg(feature = "std")]
+            if let Err(ref e) = pipeline_res {
+                eprintln!("warn: pipelined UTXO download interrupted ({e}); continuing sequentially");
+            }
+            let _ = pipeline_res;
+        }
 
         while idx_i < indices.len() {
             batch_i += 1;
@@ -845,6 +985,7 @@ impl MwebSyncer {
             if batch.utxos.is_empty() {
                 // Nothing at/after this leaf; skip it so we cannot spin forever.
                 idx_i += 1;
+                publish_progress(idx_i - idx_start);
                 continue;
             }
             let mut entries: Vec<(u64, Output)> = Vec::new();
@@ -868,6 +1009,7 @@ impl MwebSyncer {
                 idx_i += 1;
             }
             state.utxo_cursor = Some(last_leaf);
+            publish_progress(idx_i - idx_start);
 
             // After a successful verify, gradually restore larger batches.
             if req_size < self.batch_size {
@@ -1059,6 +1201,9 @@ mod tests {
         assert!(is_banworthy_peer_error(&Error::Crypto(
             "output_root mismatch".into()
         )));
+        assert!(is_banworthy_peer_error(&Error::Crypto(
+            "p2p read header: failed to fill whole buffer".into()
+        )));
         assert!(!is_banworthy_peer_error(&Error::InsufficientFunds));
         assert!(!is_banworthy_peer_error(&Error::Crypto(
             "expected FULL_UTXO format".into()
@@ -1183,6 +1328,212 @@ mod tests {
             vec![(23, 2), (30, 3)]
         );
         assert!(filter_spans_after_cursor(spans, Some(100)).is_empty());
+    }
+
+    /// Serves a fixed leafset, no headers, and an empty UTXO catalog while counting
+    /// `get_utxos` calls. With empty batches, `run_once` issues exactly one request per
+    /// diffed "added" leaf, so the call count reveals the diff size.
+    struct CountingSource {
+        leafset: MwebLeafset,
+        utxo_calls: usize,
+    }
+
+    impl crate::lip0006::MwebUtxoSource for CountingSource {
+        fn get_header(
+            &mut self,
+            _block_hash: BlockHash,
+        ) -> Result<crate::p2p::MwebHeaderMsg, Error> {
+            Err(Error::Crypto("no headers in test".into()))
+        }
+
+        fn get_leafset(&mut self, _block_hash: BlockHash) -> Result<MwebLeafset, Error> {
+            Ok(self.leafset.clone())
+        }
+
+        fn get_utxos(&mut self, req: GetMwebUtxos) -> Result<crate::p2p::MwebUtxos, Error> {
+            self.utxo_calls += 1;
+            Ok(crate::p2p::MwebUtxos {
+                block_hash: req.block_hash,
+                start_index: req.start_index,
+                output_format: OUTPUT_FORMAT_FULL,
+                utxos: Vec::new(),
+                parent_hashes: Vec::new(),
+            })
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn run_extension_pass(prev_hash_on_chain: BlockHash) -> (usize, SyncState) {
+        use crate::keys::{MasterKeyScheme, MasterKeys};
+
+        let secp = Secp256k1::new();
+        let keys = MasterKeys::from_seed(
+            &[7u8; 64],
+            bitcoin::Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
+        let book = AddressBook::from_keys(&keys, 2, &secp).unwrap();
+
+        let hash_a = BlockHash::from_byte_array([0xaa; 32]);
+        let hash_b = BlockHash::from_byte_array([0xbb; 32]);
+        let mut state = SyncState {
+            tip_hash: Some(hash_a),
+            tip_height: Some(10),
+            leafset: MwebLeafset::from_indices(hash_a, &[0, 1, 2]).leafset,
+            ..SyncState::default()
+        };
+
+        let mut source = CountingSource {
+            leafset: MwebLeafset::from_indices(hash_b, &[0, 1, 2, 3]),
+            utxo_calls: 0,
+        };
+        let mut headers = FixedHeaderProvider::tip_only(hash_b, 11);
+        headers.hashes.insert(10, prev_hash_on_chain);
+        let mut notifier = ReadyNotifier { tip_height: 11 };
+        let mut db = MwebCoinDatabase::new();
+
+        let syncer = MwebSyncer {
+            verify: crate::lip0006::VerifyMode::Trusted,
+            ..MwebSyncer::tip_only()
+        };
+        syncer
+            .run_once(
+                &headers,
+                &mut notifier,
+                &mut source,
+                &mut state,
+                &keys,
+                &book,
+                &mut db,
+                &secp,
+                None,
+            )
+            .unwrap();
+        (source.utxo_calls, state)
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn tip_extension_keeps_leafset_and_diffs_only_new_leaves() {
+        let hash_a = BlockHash::from_byte_array([0xaa; 32]);
+        let hash_b = BlockHash::from_byte_array([0xbb; 32]);
+        // Previous tip still on-chain at height 10 → pure extension → only leaf 3 diffed.
+        let (utxo_calls, state) = run_extension_pass(hash_a);
+        assert_eq!(utxo_calls, 1);
+        assert_eq!(state.tip_hash, Some(hash_b));
+        assert_eq!(state.tip_height, Some(11));
+        assert_eq!(
+            state.leafset,
+            MwebLeafset::from_indices(hash_b, &[0, 1, 2, 3]).leafset
+        );
+    }
+
+    /// Records the schedule handed to `get_utxos_pipelined`, then fails so the caller
+    /// falls back to the sequential loop (which sees empty batches).
+    struct PipelineRecorder {
+        leafset: MwebLeafset,
+        schedules: Vec<Vec<GetMwebUtxos>>,
+    }
+
+    impl crate::lip0006::MwebUtxoSource for PipelineRecorder {
+        fn get_header(
+            &mut self,
+            _block_hash: BlockHash,
+        ) -> Result<crate::p2p::MwebHeaderMsg, Error> {
+            Err(Error::Crypto("no headers in test".into()))
+        }
+
+        fn get_leafset(&mut self, _block_hash: BlockHash) -> Result<MwebLeafset, Error> {
+            Ok(self.leafset.clone())
+        }
+
+        fn get_utxos(&mut self, req: GetMwebUtxos) -> Result<crate::p2p::MwebUtxos, Error> {
+            Ok(crate::p2p::MwebUtxos {
+                block_hash: req.block_hash,
+                start_index: req.start_index,
+                output_format: OUTPUT_FORMAT_FULL,
+                utxos: Vec::new(),
+                parent_hashes: Vec::new(),
+            })
+        }
+
+        fn get_utxos_pipelined(
+            &mut self,
+            reqs: &[GetMwebUtxos],
+            _on_batch: &mut dyn FnMut(crate::p2p::MwebUtxos) -> Result<(), Error>,
+        ) -> Result<(), Error> {
+            self.schedules.push(reqs.to_vec());
+            Err(Error::Crypto("recorder aborts pipeline".into()))
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn full_sync_pipelines_deterministic_chunked_schedule() {
+        use crate::keys::{MasterKeyScheme, MasterKeys};
+
+        let secp = Secp256k1::new();
+        let keys = MasterKeys::from_seed(
+            &[7u8; 64],
+            bitcoin::Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
+        let book = AddressBook::from_keys(&keys, 2, &secp).unwrap();
+
+        let hash = BlockHash::from_byte_array([0xaa; 32]);
+        // Empty prior leafset → full sync; added leaves = {0, 2, 3, 5, 8}.
+        let mut state = SyncState::default();
+        let mut source = PipelineRecorder {
+            leafset: MwebLeafset::from_indices(hash, &[0, 2, 3, 5, 8]),
+            schedules: Vec::new(),
+        };
+        let headers = FixedHeaderProvider::tip_only(hash, 11);
+        let mut notifier = ReadyNotifier { tip_height: 11 };
+        let mut db = MwebCoinDatabase::new();
+
+        let syncer = MwebSyncer {
+            verify: crate::lip0006::VerifyMode::Trusted,
+            batch_size: 2,
+            ..MwebSyncer::tip_only()
+        };
+        syncer
+            .run_once(
+                &headers,
+                &mut notifier,
+                &mut source,
+                &mut state,
+                &keys,
+                &book,
+                &mut db,
+                &secp,
+                None,
+            )
+            .unwrap();
+
+        // Chunks of 2 over [0, 2, 3, 5, 8] → requests start at leaves 0, 3, 8.
+        assert_eq!(source.schedules.len(), 1);
+        let reqs = &source.schedules[0];
+        assert_eq!(
+            reqs.iter().map(|r| r.start_index).collect::<Vec<_>>(),
+            vec![0, 3, 8]
+        );
+        assert!(reqs.iter().all(|r| r.num_requested == 2));
+        assert!(reqs.iter().all(|r| r.block_hash == hash));
+        // Recorder aborted the pipeline; the sequential fallback still finished the pass.
+        assert_eq!(state.tip_hash, Some(hash));
+        assert!(state.utxo_cursor.is_none());
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn tip_reorg_invalidates_leafset_and_rediffs_all_leaves() {
+        // Different hash at the previous height → reorg → full diff of all 4 leaves.
+        let (utxo_calls, _) = run_extension_pass(BlockHash::from_byte_array([0xcc; 32]));
+        assert_eq!(utxo_calls, 4);
     }
 
     #[test]

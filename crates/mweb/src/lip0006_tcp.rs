@@ -108,16 +108,18 @@ impl TcpMwebPeer {
         &mut self,
         mut op: impl FnMut(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        // litecoind often drops light-client sockets under UTXO-sync load; back off
-        // and keep trying rather than failing the whole multi-hour download.
-        const MAX_ATTEMPTS: u32 = 12;
+        // Retry briefly to ride out a single dropped socket, then give up: sync
+        // progress is checkpointed (utxo cursor / differential state), the peer
+        // pool rotates on failure, and callers re-run sync shortly after. A dead
+        // or misbehaving peer must not stall the caller for minutes.
+        const MAX_ATTEMPTS: u32 = 4;
         let mut attempt = 0u32;
         loop {
             match op(self) {
                 Ok(v) => return Ok(v),
                 Err(e) if Self::is_transient(&e) && attempt + 1 < MAX_ATTEMPTS => {
                     attempt += 1;
-                    let sleep_ms = (500u64 * (1u64 << attempt.min(6))).min(30_000);
+                    let sleep_ms = (500u64 * (1u64 << attempt.min(6))).min(2_000);
                     #[cfg(feature = "std")]
                     {
                         eprintln!(
@@ -305,5 +307,38 @@ impl MwebUtxoSource for TcpMwebPeer {
             MwebUtxos::consensus_decode(&mut cursor)
                 .map_err(|e| Error::Crypto(alloc::format!("mwebutxos decode: {e}")))
         })
+    }
+
+    /// True pipelining: write every `getmwebutxos` request upfront, then stream the
+    /// responses. litecoind processes a peer's messages in order, so while we verify
+    /// and scan batch `k` it is already building batch `k + 1`.
+    fn get_utxos_pipelined(
+        &mut self,
+        reqs: &[GetMwebUtxos],
+        on_batch: &mut dyn FnMut(MwebUtxos) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let mut run = |this: &mut Self| -> Result<(), Error> {
+            for req in reqs {
+                let payload = serialize(req);
+                this.send_cmd("getmwebutxos", &payload)?;
+            }
+            for _ in reqs {
+                let resp = this.recv_until_cmd("mwebutxos")?;
+                let mut cursor = std::io::Cursor::new(resp);
+                let batch = MwebUtxos::consensus_decode(&mut cursor)
+                    .map_err(|e| Error::Crypto(alloc::format!("mwebutxos decode: {e}")))?;
+                on_batch(batch)?;
+            }
+            Ok(())
+        };
+        match run(self) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Responses for requests we never read may still be queued on the
+                // socket; reconnect so later sequential requests don't consume them.
+                let _ = self.reconnect();
+                Err(e)
+            }
+        }
     }
 }
