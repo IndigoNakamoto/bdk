@@ -58,6 +58,41 @@ impl AddressBook {
     }
 }
 
+/// Find the address-book entry whose `B_i` satisfies `Ko = B_i · out_key`.
+///
+/// With the zkp feature the scalar is inverted once and the candidate `B_i`
+/// is looked up directly; without it, fall back to forward-multiplying every
+/// book entry (O(gap limit) EC multiplies per view-tag match).
+#[cfg(feature = "zkp")]
+fn lookup_spend_pubkey(
+    book: &AddressBook,
+    ko: &PublicKey,
+    out_key: &[u8; 32],
+    secp: &Secp256k1<All>,
+) -> Result<Option<(u32, PublicKey)>, Error> {
+    let inv = crate::crypto::scalar_inverse(out_key)?;
+    let inv_scalar = Scalar::from_be_bytes(inv).map_err(|_| Error::InvalidTweak)?;
+    let b_i = ko.mul_tweak(secp, &inv_scalar)?;
+    Ok(book.index_of(&b_i).map(|idx| (idx, b_i)))
+}
+
+#[cfg(not(feature = "zkp"))]
+fn lookup_spend_pubkey(
+    book: &AddressBook,
+    ko: &PublicKey,
+    out_key: &[u8; 32],
+    secp: &Secp256k1<All>,
+) -> Result<Option<(u32, PublicKey)>, Error> {
+    let out_key_scalar = Scalar::from_be_bytes(*out_key).map_err(|_| Error::InvalidTweak)?;
+    for (ref_b, &idx) in &book.by_spend_pk {
+        let b_i = PublicKey::from_slice(ref_b)?;
+        if b_i.mul_tweak(secp, &out_key_scalar)? == *ko {
+            return Ok(Some((idx, b_i)));
+        }
+    }
+    Ok(None)
+}
+
 /// Core `Output::GetOutputID()` / `ComputeHash`.
 pub fn output_id(output: &mweb::Output) -> [u8; 32] {
     let msg_hash = blake3_hash(&serialize(&output.message));
@@ -102,23 +137,13 @@ pub fn rewind_output(
 
     let t = hashed_pubkey(HashTag::Derive, &shared_point);
     let out_key = hashed(HashTag::OutKey, &t);
-    let out_key_scalar = Scalar::from_be_bytes(out_key).map_err(|_| Error::InvalidTweak)?;
 
-    // B_i such that Ko = B_i · H(OUT_KEY||t)  → try gap book via forward multiply
-    let mut matched_index = None;
-    let mut matched_b = None;
-    for (ref_b, &idx) in &book.by_spend_pk {
-        let b_i = PublicKey::from_slice(ref_b)?;
-        let expected_ko = b_i.mul_tweak(secp, &out_key_scalar)?;
-        if expected_ko == ko {
-            matched_index = Some(idx);
-            matched_b = Some(b_i);
-            break;
-        }
-    }
-    let (address_index, b_i) = match (matched_index, matched_b) {
-        (Some(i), Some(b)) => (i, b),
-        _ => return Ok(None),
+    // Ko = B_i · H(OUT_KEY||t)  →  B_i = Ko · H(OUT_KEY||t)⁻¹, then a single
+    // address-book lookup. Cost is independent of the book size, so large
+    // gap limits are free here (the map only costs memory).
+    let (address_index, b_i) = match lookup_spend_pubkey(book, &ko, &out_key, secp)? {
+        Some(hit) => hit,
+        None => return Ok(None),
     };
 
     let a_i = {
@@ -545,6 +570,37 @@ mod tests {
             .expect("rewind go fixture");
         assert_eq!(go_coin.amount, amount);
         assert_eq!(go_coin.address_index, 0);
+    }
+
+    /// Recovery regression: a coin received past the old 20-address book is
+    /// missed with a small book and found once the book covers its index.
+    #[test]
+    fn rewind_finds_coin_past_default_gap_limit() {
+        let secp = Secp256k1::new();
+        let keys = keychain_keys(&secp);
+        let index = 25u32;
+        let addr = keys.address(index, NetworkKind::Main, &secp).unwrap();
+        let sender = [0x5au8; 32];
+        let (_, _, output) = create_output_with_sender(&addr, 42_000, &sender, &secp).unwrap();
+
+        let small_book = AddressBook::from_keys(&keys, DEFAULT_GAP_LIMIT, &secp).unwrap();
+        assert!(rewind_output(&keys, &small_book, &output, &secp)
+            .unwrap()
+            .is_none());
+
+        let big_book = AddressBook::from_keys(&keys, 1000, &secp).unwrap();
+        let coin = rewind_output(&keys, &big_book, &output, &secp)
+            .unwrap()
+            .expect("coin at index 25 must be found");
+        assert_eq!(coin.address_index, index);
+        assert_eq!(coin.amount, 42_000);
+
+        let spend = coin.spend_key.expect("spend key");
+        let sk = bitcoin::secp256k1::SecretKey::from_slice(&spend).unwrap();
+        assert_eq!(
+            PublicKey::from_secret_key(&secp, &sk),
+            output.receiver_public_key
+        );
     }
 
     /// Port of ltcd `TestOutputRoundTripMultipleIndices` (`keychain_test.go`).

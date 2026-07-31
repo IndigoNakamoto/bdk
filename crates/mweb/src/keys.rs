@@ -22,6 +22,8 @@ pub enum MasterKeyScheme {
     LitecoinCore,
     /// LIP-0004 text: `m/1/0/100'` and `m/1/0/101'` (non-hardened middle components).
     Lip0004,
+    /// mwebd / Nexus (BIP43 purpose 1000, coin 2, account 0): `m/1000'/2'/0'/{0,1}'`.
+    Mwebd,
 }
 
 impl MasterKeyScheme {
@@ -38,6 +40,12 @@ impl MasterKeyScheme {
                 ChildNumber::from_normal_idx(0)?,
                 ChildNumber::from_hardened_idx(100)?,
             ]),
+            Self::Mwebd => DerivationPath::from(vec![
+                ChildNumber::from_hardened_idx(1000)?,
+                ChildNumber::from_hardened_idx(2)?,
+                ChildNumber::from_hardened_idx(0)?,
+                ChildNumber::from_hardened_idx(0)?,
+            ]),
         })
     }
 
@@ -53,6 +61,12 @@ impl MasterKeyScheme {
                 ChildNumber::from_normal_idx(1)?,
                 ChildNumber::from_normal_idx(0)?,
                 ChildNumber::from_hardened_idx(101)?,
+            ]),
+            Self::Mwebd => DerivationPath::from(vec![
+                ChildNumber::from_hardened_idx(1000)?,
+                ChildNumber::from_hardened_idx(2)?,
+                ChildNumber::from_hardened_idx(0)?,
+                ChildNumber::from_hardened_idx(1)?,
             ]),
         })
     }
@@ -84,6 +98,18 @@ impl MasterKeys {
         secp: &Secp256k1<All>,
     ) -> Result<Self, Error> {
         let master = Xpriv::new_master(network, seed)?;
+        Self::from_xprv(&master, scheme, secp)
+    }
+
+    /// Derive master keys from a BIP32 *root* extended key (depth 0).
+    ///
+    /// All schemes branch directly off the master key, so an account-level
+    /// xprv cannot derive MWEB keys; callers should validate depth first.
+    pub fn from_xprv(
+        master: &Xpriv,
+        scheme: MasterKeyScheme,
+        secp: &Secp256k1<All>,
+    ) -> Result<Self, Error> {
         let fingerprint = master.fingerprint(secp);
         let scan_path = scheme.scan_path()?;
         let spend_path = scheme.spend_path()?;
@@ -267,6 +293,28 @@ mod tests {
         assert_eq!(keys.master_fingerprint, keys.scan_key_source().0);
         assert_eq!(keys.scan_path.to_string(), "0'/100'/0'");
         assert_eq!(keys.spend_path.to_string(), "0'/100'/1'");
+    }
+
+    #[test]
+    fn mwebd_scheme_paths_and_from_xprv_equivalence() {
+        let secp = Secp256k1::new();
+        let seed = [0x42u8; 32];
+        let keys = MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::Mwebd, &secp)
+            .unwrap();
+        assert_eq!(keys.scan_path.to_string(), "1000'/2'/0'/0'");
+        assert_eq!(keys.spend_path.to_string(), "1000'/2'/0'/1'");
+        assert_ne!(
+            keys.scan,
+            MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::LitecoinCore, &secp)
+                .unwrap()
+                .scan
+        );
+
+        let master = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
+        let via_xprv = MasterKeys::from_xprv(&master, MasterKeyScheme::Mwebd, &secp).unwrap();
+        assert_eq!(via_xprv.scan, keys.scan);
+        assert_eq!(via_xprv.spend, keys.spend);
+        assert_eq!(via_xprv.master_fingerprint, keys.master_fingerprint);
     }
 
     /// Port of ltcd `ltcutil/mweb/keychain_test.go` + ltcwallet `mweb_compat_test.go`.

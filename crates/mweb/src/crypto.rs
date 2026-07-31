@@ -37,6 +37,12 @@ pub fn pedersen_commit(
     }
 }
 
+/// Modular inverse of a nonzero scalar mod the secp256k1 group order.
+#[cfg(feature = "zkp")]
+pub fn scalar_inverse(scalar: &[u8; 32]) -> Result<[u8; 32], Error> {
+    mw::scalar_inverse(scalar)
+}
+
 /// Core `Pedersen::BlindSwitch`.
 pub fn blind_switch(
     blind: &[u8; 32],
@@ -255,6 +261,14 @@ pub mod mw {
             .blind_sum(pos?, neg?)
             .map_err(|_| Error::Crypto("blind_sum failed".into()))?;
         Ok(sum.0)
+    }
+
+    pub(super) fn scalar_inverse(scalar: &[u8; 32]) -> Result<[u8; 32], Error> {
+        let secp = secp();
+        let mut sk = GrinSk::from_slice(secp, scalar).map_err(|_| Error::InvalidTweak)?;
+        sk.inv_assign(secp)
+            .map_err(|_| Error::Crypto("scalar inversion failed".into()))?;
+        Ok(sk.0)
     }
 
     pub(super) fn pedersen_commit(value: u64, blind: &[u8; 32]) -> Result<[u8; 33], Error> {
