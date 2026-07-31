@@ -20,6 +20,9 @@ use bitcoin::Transaction;
 pub const MSG_MWEB_HEADER: u32 = 0x2000_0008;
 /// `getdata` inventory type for MWEB leafset (LIP-0006).
 pub const MSG_MWEB_LEAFSET: u32 = 0x2000_0009;
+/// `inv`/`getdata` type for an MWEB transaction:
+/// `MSG_WITNESS_TX (1 | 1<<30) | MSG_MWEB_FLAG (1<<29)` per Core `protocol.h`.
+pub const MSG_MWEB_TX: u32 = 0x6000_0001;
 
 /// FULL_UTXO — commitment, keys, message, rangeproof, signature.
 pub const OUTPUT_FORMAT_FULL: u8 = 0x00;

@@ -22,8 +22,21 @@ use crate::error::Error;
 use crate::lip0006::MwebUtxoSource;
 use crate::p2p::{
     mweb_inv, GetMwebUtxos, MwebHeaderMsg, MwebLeafset, MwebUtxos, MSG_MWEB_HEADER,
-    MSG_MWEB_LEAFSET,
+    MSG_MWEB_LEAFSET, MSG_MWEB_TX,
 };
+use crate::tx_builder::kernel_id;
+
+/// Outcome of [`TcpMwebPeer::broadcast_tx`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BroadcastAck {
+    /// The peer served the tx back via `getdata` — it was accepted to the
+    /// mempool and entered the peer's relay set.
+    Confirmed,
+    /// The peer processed the `tx` message without erroring, but acceptance
+    /// could not be confirmed before the polling deadline. The tx may still
+    /// propagate; callers should treat this as an optimistic success.
+    Sent,
+}
 
 /// TCP peer implementing [`MwebUtxoSource`].
 pub struct TcpMwebPeer {
@@ -91,6 +104,80 @@ impl TcpMwebPeer {
         let fresh = Self::connect_sock(sock, self.addr.clone(), self.network)?;
         *self = fresh;
         Ok(())
+    }
+
+    /// Broadcast a transaction and poll the peer for mempool acceptance.
+    ///
+    /// Designed for pure MWEB transactions (MWEB→MWEB sends and peg-outs),
+    /// which Electrum servers cannot relay. Works as follows:
+    ///
+    /// 1. Send the unsolicited `tx` message (Core validates those regardless
+    ///    of a prior `inv`). The litecoin consensus encoding carries the MWEB
+    ///    body (segwit flag bit `0x08`).
+    /// 2. `ping`/`pong` flush: litecoind processes a peer's messages in
+    ///    order, so the pong proves the tx was fully processed.
+    /// 3. Poll `getdata` for the tx. Core withholds *fresh* mempool txs from
+    ///    `getdata` replies for privacy (`UNCONDITIONAL_RELAY_DELAY`), but
+    ///    serves them from its relay map as soon as it announces them to
+    ///    other peers (typically 5–15s), and it always answers a tx `getdata`
+    ///    promptly with either `tx` or `notfound`.
+    ///
+    /// Persistent `notfound` until the deadline yields [`BroadcastAck::Sent`]
+    /// (not an error): a node with slow trickle timing or no peers to
+    /// announce to looks identical to a rejected tx from here.
+    pub fn broadcast_tx(&mut self, tx: &bitcoin::Transaction) -> Result<BroadcastAck, Error> {
+        let inv = tx_inventory(tx)?;
+        self.send(NetworkMessage::Tx(tx.clone()))?;
+
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0xB40A_DCA5);
+        self.send(NetworkMessage::Ping(nonce))?;
+        self.wait_pong(nonce)?;
+
+        const POLL_ATTEMPTS: u32 = 6;
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+        for attempt in 0..POLL_ATTEMPTS {
+            self.send(NetworkMessage::GetData(vec![inv.clone()]))?;
+            let mut served = None;
+            for _ in 0..64 {
+                let msg = self.recv()?;
+                match msg.payload() {
+                    NetworkMessage::Tx(_) => {
+                        served = Some(true);
+                        break;
+                    }
+                    NetworkMessage::NotFound(_) => {
+                        served = Some(false);
+                        break;
+                    }
+                    NetworkMessage::Ping(n) => self.send(NetworkMessage::Pong(*n))?,
+                    _ => {}
+                }
+            }
+            match served {
+                Some(true) => return Ok(BroadcastAck::Confirmed),
+                Some(false) | None => {
+                    if attempt + 1 < POLL_ATTEMPTS {
+                        std::thread::sleep(POLL_INTERVAL);
+                    }
+                }
+            }
+        }
+        Ok(BroadcastAck::Sent)
+    }
+
+    fn wait_pong(&mut self, nonce: u64) -> Result<(), Error> {
+        for _ in 0..64 {
+            let msg = self.recv()?;
+            match msg.payload() {
+                NetworkMessage::Pong(n) if *n == nonce => return Ok(()),
+                NetworkMessage::Ping(n) => self.send(NetworkMessage::Pong(*n))?,
+                _ => {}
+            }
+        }
+        Err(Error::Crypto("p2p: no pong after tx broadcast".into()))
     }
 
     fn is_transient(err: &Error) -> bool {
@@ -272,6 +359,62 @@ impl TcpMwebPeer {
         Err(Error::Crypto(alloc::format!(
             "p2p: timed out waiting for {want}"
         )))
+    }
+}
+
+/// `getdata` inventory identifying `tx` for mempool polling.
+///
+/// Pure MWEB transactions (empty canonical vin/vout) are identified by the
+/// first kernel's hash (Core `CTransaction::ComputeHash` special case), with
+/// inv type `MSG_MWEB_TX`. Anything else is identified by txid.
+fn tx_inventory(tx: &bitcoin::Transaction) -> Result<Inventory, Error> {
+    if tx.input.is_empty() && tx.output.is_empty() {
+        let kernel = tx
+            .mw_tx
+            .as_ref()
+            .and_then(|mw| mw.body.kernels.first())
+            .ok_or_else(|| Error::Crypto("broadcast: MWEB tx has no kernel".into()))?;
+        return Ok(Inventory::Unknown {
+            inv_type: MSG_MWEB_TX,
+            hash: kernel_id(kernel),
+        });
+    }
+    Ok(Inventory::Transaction(tx.compute_txid()))
+}
+
+#[cfg(test)]
+mod broadcast_tests {
+    use super::*;
+
+    /// Round-trip a `MSG_MWEB_TX` getdata against a live node: an unknown hash
+    /// must come back as `notfound`, proving the inv encoding is accepted and
+    /// the reply handling in `broadcast_tx`'s poll loop works.
+    ///
+    /// Requires litecoind on mainnet: run with
+    /// `cargo test -p bdk_mweb --features std,lip0006 -- --ignored probe_mweb_tx_getdata`
+    #[test]
+    #[ignore = "requires local litecoind at 127.0.0.1:9333"]
+    fn probe_mweb_tx_getdata_notfound() {
+        let mut peer =
+            TcpMwebPeer::connect("127.0.0.1:9333", bitcoin::Network::Bitcoin).expect("connect");
+        let inv = Inventory::Unknown {
+            inv_type: MSG_MWEB_TX,
+            hash: [0xAB; 32],
+        };
+        peer.send(NetworkMessage::GetData(vec![inv])).expect("getdata");
+        for _ in 0..64 {
+            let msg = peer.recv().expect("recv");
+            match msg.payload() {
+                NetworkMessage::NotFound(items) => {
+                    assert_eq!(items.len(), 1);
+                    return;
+                }
+                NetworkMessage::Tx(_) => panic!("node served a tx for a random hash"),
+                NetworkMessage::Ping(n) => peer.send(NetworkMessage::Pong(*n)).expect("pong"),
+                _ => {}
+            }
+        }
+        panic!("no notfound reply for MSG_MWEB_TX getdata");
     }
 }
 
