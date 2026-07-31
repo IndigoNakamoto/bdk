@@ -421,7 +421,7 @@ fn filter_spans_after_cursor(spans: Vec<(u64, u16)>, cursor: Option<u64>) -> Vec
 }
 
 /// MSB-first leafset bit test (same layout as [`diff_leafsets`] / [`MwebLeafset`]).
-fn leafset_has_leaf(leafset: &[u8], leaf: u64) -> bool {
+pub fn leafset_has_leaf(leafset: &[u8], leaf: u64) -> bool {
     let byte_i = (leaf / 8) as usize;
     let bit = (leaf % 8) as u8;
     let mask = 1u8 << (7 - bit);
