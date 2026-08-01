@@ -1,9 +1,18 @@
-# Transitive via minreq 2.x → rustls 0.21 / rustls-webpki 0.101 (esplora + jsonrpc).
-# Bump when IndigoNakamoto/rust-esplora-client and jsonrpc move off rustls 0.21.
+# Ignored advisories. Kept in sync by hand with the `[advisories].ignore` list
+# in deny.toml; the reasoning and exit conditions are in docs/SUPPLY_CHAIN.md.
+#
+# None of these are on a bdk_mweb code path: the crate has no TLS dependency
+# (its only network code is the plain-TCP LIP-0006 peer), and bincode arrives
+# through bdk_file_store, which bdk_mweb uses only in the persist_filestore test.
 [advisories]
 ignore = [
+    # rustls 0.21 / rustls-webpki 0.101, transitive via minreq 2.x, reached by
+    # bdk_esplora and the jsonrpc client. Clears when
+    # IndigoNakamoto/rust-esplora-client and jsonrpc move off rustls 0.21.
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
-    "RUSTSEC-2025-0141", # bincode unmaintained (file_store / persist path)
+    # bincode unmaintained, via bdk_file_store. An unmaintained notice, not a
+    # vulnerability. Clears when file_store changes its encoding.
+    "RUSTSEC-2025-0141",
 ]

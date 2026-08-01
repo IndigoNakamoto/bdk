@@ -13,12 +13,27 @@ use bitcoin::blockdata::mimblewimble::Output;
 
 use crate::error::Error;
 use crate::hash::blake3_hash;
+use crate::limits::MAX_OUTPUT_MMR_SIZE;
 use crate::p2p::{MwebLeafset, MwebUtxos};
 use crate::scan::output_id;
 
 /// Leaf index → MMR node position: `2 * i - popcount(i)`.
+///
+/// Saturates instead of overflowing. `2 * leaf_index` wraps for indices above
+/// `u64::MAX / 2`, which panics under `overflow-checks` and silently produces a
+/// bogus position without them. Callers bound `leaf_index` by
+/// [`MAX_OUTPUT_MMR_SIZE`] long before this matters, but the function is public and
+/// reachable with an arbitrary value; use [`checked_leaf_position`] to detect it.
 pub fn leaf_position(leaf_index: u64) -> u64 {
-    2 * leaf_index - leaf_index.count_ones() as u64
+    checked_leaf_position(leaf_index).unwrap_or(u64::MAX)
+}
+
+/// [`leaf_position`], returning `None` when the position does not fit in a `u64`.
+pub fn checked_leaf_position(leaf_index: u64) -> Option<u64> {
+    // `2 * i >= popcount(i)` for all `i`, so the subtraction cannot underflow.
+    leaf_index
+        .checked_mul(2)
+        .map(|p| p - leaf_index.count_ones() as u64)
 }
 
 /// Number of MMR nodes for `num_leaves` leaves (= position of the next leaf).
@@ -226,6 +241,11 @@ pub fn verify_leafset(
     leafset_root: &[u8; 32],
     output_mmr_size: u64,
 ) -> Result<(), Error> {
+    if output_mmr_size > MAX_OUTPUT_MMR_SIZE {
+        return Err(Error::Crypto(alloc::format!(
+            "leafset: output_mmr_size {output_mmr_size} exceeds MAX_OUTPUT_MMR_SIZE"
+        )));
+    }
     let need = output_mmr_size.div_ceil(8) as usize;
     if leafset.leafset.len() < need {
         return Err(Error::Crypto("leafset shorter than output_mmr_size".into()));
@@ -397,6 +417,24 @@ pub fn verify_utxo_batch(
     if num_leaves == 0 {
         return Err(Error::Crypto("empty output MMR".into()));
     }
+    // Bound the loops below before they are sized by a peer-supplied value.
+    if num_leaves > MAX_OUTPUT_MMR_SIZE {
+        return Err(Error::Crypto(alloc::format!(
+            "pmmr: output_mmr_size {num_leaves} exceeds MAX_OUTPUT_MMR_SIZE"
+        )));
+    }
+    // `verify_segment_root` derives the segment window from the first and last
+    // entries, so an unsorted or duplicated batch would be proved against the wrong
+    // window. Reject it rather than silently verifying something else.
+    if batch
+        .utxos
+        .windows(2)
+        .any(|w| w[0].leaf_index >= w[1].leaf_index)
+    {
+        return Err(Error::Crypto(
+            "pmmr: mwebutxos leaf indices are not strictly ascending".into(),
+        ));
+    }
     let need = num_leaves.div_ceil(8) as usize;
     if leafset.leafset.len() < need {
         return Err(Error::Crypto("leafset too short for PMMR verify".into()));
@@ -404,6 +442,16 @@ pub fn verify_utxo_batch(
     let bits = &leafset.leafset[..need];
 
     for entry in &batch.utxos {
+        // Check the range explicitly rather than leaning on `bitset_test` returning
+        // false for out-of-range bits: `leaf_position` is called on these indices
+        // further down, and the reason it is safe should be stated where it is
+        // established.
+        if entry.leaf_index >= num_leaves {
+            return Err(Error::Crypto(alloc::format!(
+                "pmmr: leaf_index {} is beyond output_mmr_size {num_leaves}",
+                entry.leaf_index
+            )));
+        }
         if !bitset_test(bits, entry.leaf_index) {
             return Err(Error::Crypto("utxo leaf_index not set in leafset".into()));
         }

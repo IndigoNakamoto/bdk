@@ -6,3 +6,10 @@
 /crates/bitcoind_rpc/ @evanlinjin @ValuedMammal
 /crates/testenv/ @tvpeter @luisschwab
 /crates/file_store/ @nymius
+# Fork-only crate: MWEB consensus crypto, FFI, and peer-facing parsing. Upstream
+# BDK maintainers do not own it, and no review should default to them.
+/crates/mweb/ @IndigoNakamoto
+/crates/testenv/src/litecoin_regtest.rs @IndigoNakamoto
+/deny.toml @IndigoNakamoto
+/docs/SECURITY_PLAN.md @IndigoNakamoto
+/docs/SUPPLY_CHAIN.md @IndigoNakamoto

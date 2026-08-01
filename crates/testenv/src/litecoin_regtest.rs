@@ -568,12 +568,23 @@ impl Drop for LitecoinNodeEnv {
 }
 
 /// Return `Ok(None)` when `LITECOIND_EXE` is unset.
+///
+/// Set `REQUIRE_LITECOIND=1` to turn that skip into an error. Silent skipping is
+/// right on a developer machine and dangerous in CI: a job that mis-sets the
+/// path goes green while asserting nothing, and the whole node-backed suite
+/// stops protecting anything without a single red build to say so.
 pub fn try_node_from_env() -> Result<Option<LitecoinNodeEnv>> {
     match LitecoinNodeEnv::from_env() {
         Ok(env) => Ok(Some(env)),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("is not set") {
+                if require_litecoind() {
+                    return Err(anyhow!(
+                        "REQUIRE_LITECOIND is set but LITECOIND_EXE is not; \
+                         refusing to skip a node-backed test"
+                    ));
+                }
                 eprintln!("skip: {msg}");
                 Ok(None)
             } else {
@@ -581,6 +592,14 @@ pub fn try_node_from_env() -> Result<Option<LitecoinNodeEnv>> {
             }
         }
     }
+}
+
+/// Whether a caller has demanded that node-backed tests actually run.
+pub fn require_litecoind() -> bool {
+    matches!(
+        std::env::var("REQUIRE_LITECOIND").as_deref(),
+        Ok("1") | Ok("true")
+    )
 }
 
 /// Running `litecoind -regtest` plus `electrs-ltc` pointed at it.
@@ -800,12 +819,19 @@ impl Drop for LitecoinTestEnv {
 }
 
 /// Return `Ok(None)` when binaries are not configured.
+///
+/// Honours `REQUIRE_LITECOIND` the same way [`try_node_from_env`] does.
 pub fn try_from_env() -> Result<Option<LitecoinTestEnv>> {
     match LitecoinTestEnv::from_env() {
         Ok(env) => Ok(Some(env)),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("is not set") {
+                if require_litecoind() {
+                    return Err(anyhow!(
+                        "REQUIRE_LITECOIND is set but the harness is not configured: {msg}"
+                    ));
+                }
                 eprintln!("skip: {msg}");
                 Ok(None)
             } else {

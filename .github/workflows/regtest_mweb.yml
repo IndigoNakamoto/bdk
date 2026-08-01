@@ -1,0 +1,110 @@
+name: Regtest MWEB
+
+# The `build-mweb` job in cont_integration.yml runs `cargo test --all-features`,
+# which *compiles* the node-backed suites and then returns from every one of
+# them: `try_node_from_env()` yields `None` when `LITECOIND_EXE` is unset, and a
+# skipped test reports as passing. So the FFI bulletproof gate, the spend
+# accepted by litecoind, the peg-in/peg-out roundtrip, the LIP-0006 sync, and
+# the anchored-verification suite have never actually executed in CI.
+#
+# This job downloads a real litecoind and runs them. `REQUIRE_LITECOIND=1` turns
+# the skip into a hard error, so a broken path fails loudly instead of going
+# green while asserting nothing.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/regtest_mweb.yml'
+      - 'crates/mweb/**'
+      - 'crates/testenv/**'
+  pull_request:
+    paths:
+      - '.github/workflows/regtest_mweb.yml'
+      - 'crates/mweb/**'
+      - 'crates/testenv/**'
+  schedule:
+    - cron: '0 5 * * 1' # Mondays 05:00 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # Litecoin Core release providing MWEB. Bump deliberately: the tests assert on
+  # consensus behaviour (HogEx commitment layout, peg-in maturity, the 675-byte
+  # bulletproof), so a version change is a real change in what is being tested.
+  LITECOIN_VERSION: 0.21.5.5
+  LITECOIN_SHA256: 623410d4f2695a68aa71332ae0672fee19276f41c1c63a531f97e24a50edde14
+
+jobs:
+  regtest-mweb:
+    name: litecoind-backed mweb tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Read rust version
+        id: read_toolchain
+        run: echo "rust_version=$(cat rust-version)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          toolchain: ${{ steps.read_toolchain.outputs.rust_version }}
+          cache: true
+
+      - name: Cache litecoind
+        id: cache-litecoind
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/litecoin-bin
+          key: litecoind-${{ env.LITECOIN_VERSION }}-x86_64-linux-gnu
+
+      - name: Download litecoind
+        if: steps.cache-litecoind.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          tarball="litecoin-${LITECOIN_VERSION}-x86_64-linux-gnu.tar.gz"
+          url="https://github.com/litecoin-project/litecoin/releases/download/v${LITECOIN_VERSION}/${tarball}"
+          curl --proto '=https' --tlsv1.2 -sSfL -o "$tarball" "$url"
+          # Pinned by digest: without this the job trusts whatever the release
+          # URL serves today, which is exactly the supply-chain hole the rest of
+          # this pass closes.
+          echo "${LITECOIN_SHA256}  ${tarball}" | sha256sum --check --strict
+          tar -xzf "$tarball"
+          mkdir -p ~/litecoin-bin
+          cp "litecoin-${LITECOIN_VERSION}/bin/litecoind" ~/litecoin-bin/
+          chmod +x ~/litecoin-bin/litecoind
+
+      # Whether MWEB actually works is proven by core_bulletproof_gate, which
+      # verifies a Core-authored 675-byte bulletproof through the FFI. This step
+      # only confirms the binary is present and runnable.
+      - name: Verify litecoind runs
+        run: ~/litecoin-bin/litecoind -version | head -n 1
+
+      - name: Run the node-backed mweb suites
+        working-directory: ./crates/mweb
+        env:
+          LITECOIND_EXE: /home/runner/litecoin-bin/litecoind
+          REQUIRE_LITECOIND: '1'
+          RUST_BACKTRACE: '1'
+        run: |
+          set -euo pipefail
+          # Serially: each test spawns its own litecoind on a free port, and a
+          # dozen concurrent nodes on a 2-core runner is where flakes come from.
+          cargo test --all-features --test core_bulletproof_gate \
+                                    --test core_receive_scan \
+                                    --test core_seed_parity \
+                                    --test core_spend \
+                                    --test core_pegin_pegout_roundtrip \
+                                    --test lip0006_sync \
+                                    --test lip0006_p2p \
+                                    --test mweb_anchoring \
+                                    -- --test-threads=1 --nocapture
+
+      - name: Run the suites that need no node
+        working-directory: ./crates/mweb
+        run: cargo test --all-features --lib --test pmmr_adversarial

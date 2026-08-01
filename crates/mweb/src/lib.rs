@@ -25,6 +25,7 @@ pub mod encrypt;
 pub mod error;
 pub mod hash;
 pub mod keys;
+pub mod limits;
 #[cfg(feature = "lip0006")]
 pub mod lip0006;
 #[cfg(feature = "lip0006")]
@@ -39,6 +40,7 @@ pub mod psbt;
 pub mod psbt_fund;
 pub mod psbt_ltcd;
 pub mod scan;
+pub mod secret;
 #[cfg(feature = "serde")]
 mod serde_util;
 #[cfg(feature = "rusqlite")]
@@ -50,9 +52,14 @@ pub use address::{is_mweb_address, parse_mweb_address, receive_address};
 pub use changeset::ChangeSet;
 pub use coin_db::{MwebBalance, MwebCoin, MwebCoinDatabase, MWEB_PEGIN_MATURITY};
 #[cfg(feature = "encrypt")]
-pub use encrypt::{open, seal};
+pub use encrypt::{
+    is_v2, open, open_with_context, open_with_context_at_least, seal, seal_with_context,
+    seal_with_context_and_counter, SealContext,
+};
 #[cfg(feature = "encrypt-changeset")]
-pub use encrypt::{open_changeset, seal_changeset};
+pub use encrypt::{
+    open_changeset, open_changeset_with_context, seal_changeset, seal_changeset_with_context,
+};
 pub use error::Error;
 pub use keys::{address_index_tweak, master_keys_from_seed, MasterKeyScheme, MasterKeys};
 #[allow(deprecated)]
@@ -75,6 +82,7 @@ pub use scan::{
     output_id, rewind_output, scan_litecoin_tx, scan_litecoin_tx_at, scan_mweb_tx, scan_mweb_tx_at,
     scan_outputs, scan_outputs_at, scan_utxo_entries_at, AddressBook, DEFAULT_GAP_LIMIT,
 };
+pub use secret::{ct_eq32, ct_eq32_opt, Secret32};
 #[allow(deprecated)]
 pub use tx_builder::build_pegin;
 pub use tx_builder::{

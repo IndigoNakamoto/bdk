@@ -1,0 +1,76 @@
+[package]
+name = "bdk-mweb-fuzz"
+edition = "2021"
+rust-version = "1.63.0"
+version = "0.0.1"
+authors = ["BDK MWEB fuzz harness"]
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace root: this crate needs a release profile the parent workspace
+# must not inherit, and `[patch]` only applies at a workspace root.
+[workspace]
+
+[dependencies]
+honggfuzz = { version = "0.5.55", default-features = false }
+bdk_mweb = { path = "..", features = ["lip0006", "std", "encrypt"] }
+litecoin = "0.32.8-rc.2"
+
+# Fuzzing an unoptimized build wastes most of the CPU budget, but debug assertions
+# are exactly the invariant checks we want the fuzzer to trip on.
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+# `litecoin` is patched to the MWEB fork in the parent workspace. This crate is
+# excluded from that workspace (it needs its own release profile), so it has to
+# repeat the patch.
+[patch.crates-io]
+litecoin = { git = "https://github.com/IndigoNakamoto/rust-litecoin.git", branch = "mweb-psbt-typed-maps" }
+
+[lib]
+name = "bdk_mweb_fuzz"
+path = "src/lib.rs"
+
+[[bin]]
+name = "decode_mweb_leafset"
+path = "fuzz_targets/decode_mweb_leafset.rs"
+
+[[bin]]
+name = "decode_mweb_utxos"
+path = "fuzz_targets/decode_mweb_utxos.rs"
+
+[[bin]]
+name = "decode_mweb_header"
+path = "fuzz_targets/decode_mweb_header.rs"
+
+[[bin]]
+name = "decode_get_mweb_utxos"
+path = "fuzz_targets/decode_get_mweb_utxos.rs"
+
+[[bin]]
+name = "p2p_frame"
+path = "fuzz_targets/p2p_frame.rs"
+
+[[bin]]
+name = "pmmr_math"
+path = "fuzz_targets/pmmr_math.rs"
+
+[[bin]]
+name = "verify_leafset"
+path = "fuzz_targets/verify_leafset.rs"
+
+[[bin]]
+name = "verify_utxo_batch"
+path = "fuzz_targets/verify_utxo_batch.rs"
+
+[[bin]]
+name = "sync_driver"
+path = "fuzz_targets/sync_driver.rs"
+
+[[bin]]
+name = "open_sealed"
+path = "fuzz_targets/open_sealed.rs"

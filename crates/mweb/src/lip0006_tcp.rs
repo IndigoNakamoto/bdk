@@ -19,12 +19,19 @@ use bitcoin::p2p::{Address, Magic, ServiceFlags};
 use bitcoin::Network;
 
 use crate::error::Error;
+use crate::limits::MAX_P2P_PAYLOAD;
 use crate::lip0006::MwebUtxoSource;
 use crate::p2p::{
     mweb_inv, GetMwebUtxos, MwebHeaderMsg, MwebLeafset, MwebUtxos, MSG_MWEB_HEADER,
     MSG_MWEB_LEAFSET, MSG_MWEB_TX,
 };
 use crate::tx_builder::kernel_id;
+
+/// Wall-clock budget for one [`TcpMwebPeer::recv_until_cmd`] call.
+///
+/// Generous enough for litecoind to assemble a large UTXO batch under load, but
+/// bounded so a peer trickling filler messages cannot stall a sync indefinitely.
+const RECV_UNTIL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Outcome of [`TcpMwebPeer::broadcast_tx`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,7 +146,7 @@ impl TcpMwebPeer {
         const POLL_ATTEMPTS: u32 = 6;
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
         for attempt in 0..POLL_ATTEMPTS {
-            self.send(NetworkMessage::GetData(vec![inv.clone()]))?;
+            self.send(NetworkMessage::GetData(vec![inv]))?;
             let mut served = None;
             for _ in 0..64 {
                 let msg = self.recv()?;
@@ -319,21 +326,30 @@ impl TcpMwebPeer {
         self.stream
             .read_exact(&mut header)
             .map_err(|e| Error::Crypto(alloc::format!("p2p read header: {e}")))?;
-        let len = u32::from_le_bytes(header[16..20].try_into().unwrap()) as usize;
+        // Validate magic and bound the length *before* allocating: the declared
+        // length is peer-controlled, and `deserialize` only checks magic and
+        // checksum after the buffer already exists.
+        let len = frame_payload_len(self.magic, &header)?;
         let mut payload = vec![0u8; len];
         if len > 0 {
             self.stream
                 .read_exact(&mut payload)
                 .map_err(|e| Error::Crypto(alloc::format!("p2p read payload: {e}")))?;
         }
-        let mut full = Vec::with_capacity(24 + len);
-        full.extend_from_slice(&header);
-        full.extend_from_slice(&payload);
-        deserialize(&full).map_err(|e| Error::Crypto(alloc::format!("p2p decode: {e}")))
+        parse_frame(self.magic, &header, &payload)
     }
 
     fn recv_until_cmd(&mut self, want: &str) -> Result<Vec<u8>, Error> {
+        // The message counter alone is not a bound on time: each `recv` can block for
+        // the full socket read timeout, so 64 messages of filler can stall a single
+        // call for hours. Cap wall-clock time as well.
+        let deadline = std::time::Instant::now() + RECV_UNTIL_DEADLINE;
         for _ in 0..64 {
+            if std::time::Instant::now() >= deadline {
+                return Err(Error::Crypto(alloc::format!(
+                    "p2p: timed out waiting for {want} (deadline exceeded)"
+                )));
+            }
             let msg = self.recv()?;
             let cmd = msg.command().to_string();
             match msg.payload() {
@@ -362,6 +378,46 @@ impl TcpMwebPeer {
     }
 }
 
+/// Validate a P2P message header against `magic` and return its declared payload length.
+///
+/// Split out from [`TcpMwebPeer::recv`] so the framing rules are testable and
+/// fuzzable without a socket. Errors are worded "protocol violation" rather than
+/// "p2p read" so they are treated as peer misbehavior (ban and rotate) instead of
+/// a transient IO fault worth reconnecting for.
+pub fn frame_payload_len(magic: Magic, header: &[u8; 24]) -> Result<usize, Error> {
+    if header[..4] != magic.to_bytes() {
+        return Err(Error::Crypto(
+            "p2p protocol violation: bad network magic".into(),
+        ));
+    }
+    let len = u32::from_le_bytes([header[16], header[17], header[18], header[19]]) as usize;
+    if len > MAX_P2P_PAYLOAD {
+        return Err(Error::Crypto(alloc::format!(
+            "p2p protocol violation: payload length {len} exceeds cap {MAX_P2P_PAYLOAD}"
+        )));
+    }
+    Ok(len)
+}
+
+/// Parse a complete P2P frame (24-byte header plus payload) into a message.
+pub fn parse_frame(
+    magic: Magic,
+    header: &[u8; 24],
+    payload: &[u8],
+) -> Result<RawNetworkMessage, Error> {
+    let len = frame_payload_len(magic, header)?;
+    if payload.len() != len {
+        return Err(Error::Crypto(alloc::format!(
+            "p2p protocol violation: payload is {} bytes, header declared {len}",
+            payload.len()
+        )));
+    }
+    let mut full = Vec::with_capacity(24 + payload.len());
+    full.extend_from_slice(header);
+    full.extend_from_slice(payload);
+    deserialize(&full).map_err(|e| Error::Crypto(alloc::format!("p2p decode: {e}")))
+}
+
 /// `getdata` inventory identifying `tx` for mempool polling.
 ///
 /// Pure MWEB transactions (empty canonical vin/vout) are identified by the
@@ -383,6 +439,63 @@ fn tx_inventory(tx: &bitcoin::Transaction) -> Result<Inventory, Error> {
 }
 
 #[cfg(test)]
+mod frame_tests {
+    use super::*;
+
+    fn header_with(magic: Magic, len: u32) -> [u8; 24] {
+        let mut h = [0u8; 24];
+        h[..4].copy_from_slice(&magic.to_bytes());
+        h[4..16].copy_from_slice(b"mwebleafset\0");
+        h[16..20].copy_from_slice(&len.to_le_bytes());
+        h
+    }
+
+    /// F-04: the declared length is peer-controlled and sizes an allocation made
+    /// before any authentication, so it has to be capped up front.
+    #[test]
+    fn frame_rejects_oversized_payload() {
+        let magic = Network::Bitcoin.magic();
+        let err = frame_payload_len(magic, &header_with(magic, u32::MAX)).unwrap_err();
+        let msg = alloc::format!("{err}");
+        assert!(msg.contains("exceeds cap"), "got {msg}");
+        assert!(
+            crate::mweb_sync::is_banworthy_peer_error(&err),
+            "an oversized frame must rotate the peer, got {msg}"
+        );
+    }
+
+    /// Magic is checked before allocating, not left to `deserialize` afterwards.
+    #[test]
+    fn frame_rejects_bad_magic() {
+        let magic = Network::Bitcoin.magic();
+        let wrong = Network::Regtest.magic();
+        let err = frame_payload_len(magic, &header_with(wrong, 0)).unwrap_err();
+        let msg = alloc::format!("{err}");
+        assert!(msg.contains("bad network magic"), "got {msg}");
+        assert!(crate::mweb_sync::is_banworthy_peer_error(&err));
+        // Bad magic is peer misbehavior, not a transient socket fault: reconnecting
+        // to the same peer would just replay it.
+        assert!(!TcpMwebPeer::is_transient(&err));
+    }
+
+    #[test]
+    fn frame_accepts_length_within_cap() {
+        let magic = Network::Bitcoin.magic();
+        assert_eq!(
+            frame_payload_len(magic, &header_with(magic, 4096)).unwrap(),
+            4096
+        );
+    }
+
+    #[test]
+    fn frame_rejects_payload_length_mismatch() {
+        let magic = Network::Bitcoin.magic();
+        let err = parse_frame(magic, &header_with(magic, 10), &[0u8; 3]).unwrap_err();
+        assert!(alloc::format!("{err}").contains("header declared"));
+    }
+}
+
+#[cfg(test)]
 mod broadcast_tests {
     use super::*;
 
@@ -401,7 +514,8 @@ mod broadcast_tests {
             inv_type: MSG_MWEB_TX,
             hash: [0xAB; 32],
         };
-        peer.send(NetworkMessage::GetData(vec![inv])).expect("getdata");
+        peer.send(NetworkMessage::GetData(vec![inv]))
+            .expect("getdata");
         for _ in 0..64 {
             let msg = peer.recv().expect("recv");
             match msg.payload() {
@@ -415,6 +529,68 @@ mod broadcast_tests {
             }
         }
         panic!("no notfound reply for MSG_MWEB_TX getdata");
+    }
+
+    /// F-01f: the gate for making [`crate::lip0006::VerifyMode::Anchored`] the
+    /// default.
+    ///
+    /// `tests/mweb_anchoring.rs` proves the anchoring chain holds on regtest.
+    /// Regtest is not mainnet: the chain there is a handful of blocks with a
+    /// two-transaction merkle tree, and litecoind takes different code paths
+    /// once a block has real depth and a real transaction count. This probe
+    /// asks a live mainnet node for a header at a recent height and runs the
+    /// full [`MwebHeaderMsg::verify_anchored`] against it.
+    ///
+    /// Until this has been run and passed against mainnet, the default stays on
+    /// `HeaderAndPmmr` — see `docs/SECURITY_PLAN.md` F-01g. Record the result
+    /// there when you run it.
+    ///
+    /// ```text
+    /// LITECOIN_P2P=127.0.0.1:9333 LITECOIN_ANCHOR_BLOCK=<hash from a trusted source> \
+    ///   cargo test -p bdk_mweb --features std,lip0006 -- --ignored probe_mainnet_anchor
+    /// ```
+    ///
+    /// `LITECOIN_ANCHOR_BLOCK` must come from somewhere other than this peer —
+    /// your own node's RPC, or a block explorer. Taking it from the peer would
+    /// make the probe as circular as the thing it exists to fix.
+    #[test]
+    #[ignore = "requires a live mainnet litecoind and a trusted block hash"]
+    fn probe_mainnet_anchor() {
+        use crate::lip0006::MwebUtxoSource;
+        use core::str::FromStr;
+
+        let addr = std::env::var("LITECOIN_P2P").unwrap_or_else(|_| "127.0.0.1:9333".to_string());
+        let block_hash = std::env::var("LITECOIN_ANCHOR_BLOCK").expect(
+            "set LITECOIN_ANCHOR_BLOCK to a mainnet block hash from a source other than \
+             this peer",
+        );
+        let block_hash = BlockHash::from_str(block_hash.trim()).expect("valid block hash");
+
+        let mut peer = TcpMwebPeer::connect(&addr, bitcoin::Network::Bitcoin)
+            .expect("connect to mainnet peer");
+        let msg = peer
+            .get_header(block_hash)
+            .expect("mwebheader from mainnet");
+
+        msg.verify_anchored(block_hash).unwrap_or_else(|e| {
+            panic!(
+                "mainnet mwebheader for {block_hash} failed verify_anchored: {e}. \
+                 VerifyMode::Anchored must not become the default until this passes."
+            )
+        });
+
+        // A peer that echoed our request back would pass the check above only if
+        // it also produced a valid merkle proof, which it cannot forge. Confirm
+        // the negative case too, so a `verify_anchored` that had degenerated
+        // into `Ok(())` would fail this probe rather than bless the flip.
+        let wrong = {
+            use bitcoin::hashes::Hash;
+            BlockHash::from_byte_array([0x11; 32])
+        };
+        assert!(
+            msg.verify_anchored(wrong).is_err(),
+            "verify_anchored accepted a header for an unrelated block"
+        );
     }
 }
 

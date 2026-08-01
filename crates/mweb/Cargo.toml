@@ -25,6 +25,7 @@ bdk_core = { path = "../core", version = "0.6.2", optional = true, default-featu
 chacha20poly1305 = { version = "0.10", optional = true, default-features = false, features = ["alloc", "rand_core"] }
 rusqlite = { version = "0.31.0", features = ["bundled"], optional = true }
 serde_json = { version = "1", optional = true, default-features = false, features = ["std"] }
+zeroize = { version = "1.7", default-features = false, features = ["alloc", "derive"] }
 
 [dev-dependencies]
 bitcoin = { package = "litecoin", version = "0.32.8-rc.2", default-features = false, features = ["std", "rand-std", "base64"] }

@@ -89,7 +89,40 @@ pub struct MasterKeys {
     pub spend_path: DerivationPath,
 }
 
+/// Best-effort wipe of `scan` and `spend` when the keys go out of scope.
+///
+/// `secp256k1::SecretKey` does not erase itself, so this calls its
+/// `non_secure_erase` overwrite explicitly. See [`crate::secret`] for the
+/// limits of zeroization in Rust: clones, moves, and swap all defeat it.
+impl Drop for MasterKeys {
+    fn drop(&mut self) {
+        self.wipe();
+    }
+}
+
+/// Redacts both secrets. `MasterKeys` previously had no `Debug` at all; this
+/// impl is additive and cannot leak key material.
+impl core::fmt::Debug for MasterKeys {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MasterKeys")
+            .field("scan", &"<redacted>")
+            .field("spend", &"<redacted>")
+            .field("scheme", &self.scheme)
+            .field("master_fingerprint", &self.master_fingerprint)
+            .field("scan_path", &self.scan_path)
+            .field("spend_path", &self.spend_path)
+            .finish()
+    }
+}
+
 impl MasterKeys {
+    /// Overwrite `scan` and `spend`. Called from [`Drop`]; also callable
+    /// directly to shorten the keys' lifetime.
+    pub fn wipe(&mut self) {
+        self.scan.non_secure_erase();
+        self.spend.non_secure_erase();
+    }
+
     /// Derive master keys from a BIP32 seed (typically 16–64 bytes).
     pub fn from_seed(
         seed: &[u8],
@@ -201,6 +234,38 @@ mod tests {
     use alloc::string::ToString;
     use bitcoin::secp256k1::Secp256k1;
 
+    fn test_keys() -> MasterKeys {
+        MasterKeys::from_seed(
+            &[0x42u8; 32],
+            Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &Secp256k1::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn debug_redacts_scan_and_spend() {
+        let keys = test_keys();
+        let scan_hex = keys.scan.display_secret().to_string();
+        let spend_hex = keys.spend.display_secret().to_string();
+        let rendered = alloc::format!("{keys:?}");
+        assert!(!rendered.contains(&scan_hex), "scan key leaked");
+        assert!(!rendered.contains(&spend_hex), "spend key leaked");
+        assert_eq!(rendered.matches("<redacted>").count(), 2);
+        assert!(rendered.contains("scan_path"));
+    }
+
+    #[test]
+    fn drop_erases_scan_and_spend() {
+        let mut keys = test_keys();
+        let scan_before = keys.scan.secret_bytes();
+        let spend_before = keys.spend.secret_bytes();
+        keys.wipe();
+        assert_ne!(keys.scan.secret_bytes(), scan_before);
+        assert_ne!(keys.spend.secret_bytes(), spend_before);
+    }
+
     #[test]
     fn spend_key_tweak_is_deterministic() {
         let secp = Secp256k1::new();
@@ -299,15 +364,20 @@ mod tests {
     fn mwebd_scheme_paths_and_from_xprv_equivalence() {
         let secp = Secp256k1::new();
         let seed = [0x42u8; 32];
-        let keys = MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::Mwebd, &secp)
-            .unwrap();
+        let keys =
+            MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::Mwebd, &secp).unwrap();
         assert_eq!(keys.scan_path.to_string(), "1000'/2'/0'/0'");
         assert_eq!(keys.spend_path.to_string(), "1000'/2'/0'/1'");
         assert_ne!(
             keys.scan,
-            MasterKeys::from_seed(&seed, Network::Bitcoin, MasterKeyScheme::LitecoinCore, &secp)
-                .unwrap()
-                .scan
+            MasterKeys::from_seed(
+                &seed,
+                Network::Bitcoin,
+                MasterKeyScheme::LitecoinCore,
+                &secp
+            )
+            .unwrap()
+            .scan
         );
 
         let master = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();

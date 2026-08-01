@@ -13,7 +13,8 @@ members = [
 ]
 # `bdk_wallet` is a nested clone of the separate IndigoNakamoto/bdk_wallet fork.
 # `vendor/bitcoincore-rpc` is its own Cargo workspace (path dep of bdk_bitcoind_rpc).
-exclude = ["bdk_wallet", "vendor/bitcoincore-rpc"]
+# `crates/mweb/fuzz` needs its own release profile (overflow checks on).
+exclude = ["bdk_wallet", "vendor/bitcoincore-rpc", "crates/mweb/fuzz"]
 
 [workspace.package]
 authors = ["Bitcoin Dev Kit Developers"]

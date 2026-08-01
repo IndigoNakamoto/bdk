@@ -1,0 +1,85 @@
+# cargo-deny configuration — run with `cargo deny check advisories bans licenses sources`.
+# CI runs this in .github/workflows/supply_chain.yml, on every push/PR and weekly.
+#
+# Mirrors ltc-wallet-mac/deny.toml so a dependency that passes there passes here.
+# The differences are deliberate and noted inline.
+
+[graph]
+# `crates/mweb` gates the FFI behind `zkp`, and `--all-features` would hide a
+# vulnerability that only reaches the default build. Checked without features
+# here; `cargo audit` in the same job covers the union.
+all-features = false
+
+[advisories]
+yanked = "deny"
+# Only fail on unmaintained crates we depend on directly. bdk pulls in a large
+# transitive tree it does not control; those still surface as `cargo audit`
+# warnings in the same CI job.
+unmaintained = "workspace"
+# Kept in lockstep with .cargo/audit.toml. Every entry needs a reason and an
+# exit condition — an undocumented ignore is a permanent blind spot.
+ignore = [
+  # rustls 0.21 / rustls-webpki 0.101, transitive via minreq 2.x, reached only
+  # by bdk_esplora and the jsonrpc client. Not on any bdk_mweb path: the mweb
+  # crate has no TLS dependency at all (its only network code is the plain-TCP
+  # LIP-0006 peer in lip0006_tcp.rs).
+  # Clears when IndigoNakamoto/rust-esplora-client and jsonrpc move off rustls 0.21.
+  "RUSTSEC-2026-0098",
+  "RUSTSEC-2026-0099",
+  "RUSTSEC-2026-0104",
+  # bincode unmaintained. Reached via bdk_file_store, which bdk_mweb uses only
+  # in tests (`persist_filestore`). Not a vulnerability; an unmaintained notice.
+  # Clears when file_store migrates its encoding.
+  "RUSTSEC-2025-0141",
+]
+
+[licenses]
+# Permissive only. Anything new that does not match fails CI so it gets a
+# deliberate review rather than arriving with a routine dependency bump.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "CC0-1.0",
+  "Zlib",
+  "BSL-1.0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CDLA-Permissive-2.0",
+  "OpenSSL",
+  # MIT +no-false-attribs, used by hex_lit via the litecoin crate.
+  "MITNFA",
+]
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+crate = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+# Duplicate versions are endemic in this tree (two hex-conservative, two
+# base64). Warn so they stay visible without blocking unrelated work.
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# Every git dependency in the tree, all Litecoin forks under one org.
+# `unknown-git = "deny"` above is what makes this list load-bearing: a new git
+# source arriving through a routine bump fails the build.
+#
+# All but rust-litecoin are pinned by `rev` in Cargo.lock. rust-litecoin is
+# patched by *branch* in the workspace Cargo.toml, so a fresh `cargo update`
+# follows the branch; see docs/SUPPLY_CHAIN.md.
+allow-git = [
+  "https://github.com/IndigoNakamoto/rust-litecoin.git",
+  "https://github.com/IndigoNakamoto/rust-electrum-client",
+  "https://github.com/IndigoNakamoto/rust-esplora-client",
+  "https://github.com/IndigoNakamoto/rust-miniscript",
+]

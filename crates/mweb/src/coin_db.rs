@@ -33,9 +33,15 @@ impl MwebBalance {
 ///
 /// # Security
 ///
-/// `blind`, `shared_secret`, and `spend_key` are spend-equivalent secrets. Persist
-/// only in encrypted storage; never log them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `blind`, `shared_secret`, and `spend_key` are spend-equivalent secrets.
+/// Persist only in encrypted storage.
+///
+/// Three protections are structural rather than advisory: [`Drop`] wipes the
+/// three secret fields, [`core::fmt::Debug`] redacts them so a stray `{:?}` in
+/// a caller's log cannot leak them, and [`PartialEq`] compares them in constant
+/// time. The fields stay `[u8; 32]` rather than [`crate::Secret32`] so that
+/// struct-literal construction in downstream crates keeps compiling.
+#[derive(Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MwebCoin {
     /// Core `Output::GetOutputID()` (BLAKE3 of selected output fields).
@@ -64,7 +70,67 @@ pub struct MwebCoin {
     pub leaf_index: Option<u64>,
 }
 
+impl core::fmt::Debug for MwebCoin {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MwebCoin")
+            .field("output_id", &self.output_id)
+            .field("commitment", &self.commitment)
+            .field("amount", &self.amount)
+            .field("address_index", &self.address_index)
+            .field("blind", &"<redacted>")
+            .field("shared_secret", &"<redacted>")
+            .field(
+                "spend_key",
+                &self.spend_key.map(|_| "<redacted>").unwrap_or("None"),
+            )
+            .field("block_height", &self.block_height)
+            .field("is_pegin", &self.is_pegin)
+            .field("leaf_index", &self.leaf_index)
+            .finish()
+    }
+}
+
+/// Hand-written to compare the three secret fields in constant time. Semantics
+/// are otherwise identical to the previous derive: full field-by-field equality.
+impl PartialEq for MwebCoin {
+    fn eq(&self, other: &Self) -> bool {
+        self.output_id == other.output_id
+            && self.commitment == other.commitment
+            && self.amount == other.amount
+            && self.address_index == other.address_index
+            && self.block_height == other.block_height
+            && self.is_pegin == other.is_pegin
+            && self.leaf_index == other.leaf_index
+            && crate::secret::ct_eq32(&self.blind, &other.blind)
+            && crate::secret::ct_eq32(&self.shared_secret, &other.shared_secret)
+            && crate::secret::ct_eq32_opt(&self.spend_key, &other.spend_key)
+    }
+}
+
+impl Eq for MwebCoin {}
+
+/// Best-effort wipe of the spend-equivalent fields. `MwebCoin` is cloned on
+/// nearly every database operation, so each clone wipes itself independently.
+/// See [`crate::secret`] for what this does and does not guarantee.
+impl Drop for MwebCoin {
+    fn drop(&mut self) {
+        self.wipe();
+    }
+}
+
 impl MwebCoin {
+    /// Overwrite the spend-equivalent fields. Called from [`Drop`]; also
+    /// callable directly to shorten a secret's lifetime.
+    pub fn wipe(&mut self) {
+        use zeroize::Zeroize;
+        self.blind.zeroize();
+        self.shared_secret.zeroize();
+        if let Some(k) = self.spend_key.as_mut() {
+            k.zeroize();
+        }
+        self.spend_key = None;
+    }
+
     /// Whether this coin has at least one confirmation at `tip_height`.
     pub fn is_confirmed(&self, tip_height: u32) -> bool {
         match self.block_height {
@@ -342,6 +408,73 @@ mod tests {
             is_pegin,
             leaf_index: None,
         }
+    }
+
+    #[test]
+    fn debug_redacts_spend_equivalent_fields() {
+        let mut c = coin(1, 100, Some(10), false);
+        c.blind = [0xaa; 32];
+        c.shared_secret = [0xbb; 32];
+        c.spend_key = Some([0xcc; 32]);
+        let rendered = alloc::format!("{c:?}");
+        assert!(!rendered.contains("170"), "blind leaked: {rendered}");
+        assert!(
+            !rendered.contains("187"),
+            "shared_secret leaked: {rendered}"
+        );
+        assert!(!rendered.contains("204"), "spend_key leaked: {rendered}");
+        assert_eq!(rendered.matches("<redacted>").count(), 3);
+        // Non-secret fields stay visible so the type is still useful in logs.
+        assert!(rendered.contains("amount: 100"));
+    }
+
+    #[test]
+    fn debug_shows_absent_spend_key_as_none() {
+        let mut c = coin(1, 100, None, false);
+        c.spend_key = None;
+        let rendered = alloc::format!("{c:?}");
+        assert!(rendered.contains("spend_key: \"None\""), "{rendered}");
+        assert_eq!(rendered.matches("<redacted>").count(), 2);
+    }
+
+    #[test]
+    fn equality_still_compares_every_field() {
+        let base = coin(1, 100, Some(10), false);
+        assert_eq!(base, base.clone());
+
+        let mutations: [fn(&mut MwebCoin); 10] = [
+            |c| c.output_id[0] ^= 1,
+            |c| c.commitment[0] ^= 1,
+            |c| c.amount ^= 1,
+            |c| c.address_index ^= 1,
+            |c| c.blind[31] ^= 1,
+            |c| c.shared_secret[31] ^= 1,
+            |c| c.spend_key = Some([0xff; 32]),
+            |c| c.block_height = Some(999),
+            |c| c.is_pegin = !c.is_pegin,
+            |c| c.leaf_index = Some(7),
+        ];
+        for (i, mutate) in mutations.iter().enumerate() {
+            let mut other = base.clone();
+            mutate(&mut other);
+            assert_ne!(base, other, "mutation {i} was not detected");
+        }
+
+        let mut no_key = base.clone();
+        no_key.spend_key = None;
+        assert_ne!(base, no_key);
+    }
+
+    #[test]
+    fn drop_wipes_secrets_in_place() {
+        let mut c = coin(1, 100, Some(10), false);
+        c.blind = [0xaa; 32];
+        c.shared_secret = [0xbb; 32];
+        c.spend_key = Some([0xcc; 32]);
+        c.wipe();
+        assert_eq!(c.blind, [0u8; 32]);
+        assert_eq!(c.shared_secret, [0u8; 32]);
+        assert_eq!(c.spend_key, None);
     }
 
     #[test]

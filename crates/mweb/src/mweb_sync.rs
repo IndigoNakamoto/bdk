@@ -18,7 +18,8 @@ use crate::coin_db::MwebCoinDatabase;
 use crate::error::Error;
 use crate::keys::MasterKeys;
 use crate::lip0006::{
-    verify_parent_hashes_present, MwebUtxoSource, SyncResult, VerifyMode, DEFAULT_UTXO_BATCH,
+    check_batch_advances, verify_parent_hashes_present, MwebUtxoSource, SyncResult, VerifyMode,
+    DEFAULT_UTXO_BATCH,
 };
 use crate::p2p::{GetMwebUtxos, MwebUtxos, OUTPUT_FORMAT_FULL};
 use crate::pmmr::{verify_leafset, verify_utxo_batch};
@@ -213,6 +214,11 @@ impl SyncNotifier for ReadyNotifier {
 }
 
 /// Whether a sync error should ban the current peer and rotate (leafset/PMMR/timeout/IO).
+///
+/// Classification is by message substring, so every error added anywhere in the
+/// crate must be checked against this list — a bounds or framing rejection that
+/// matches nothing here would leave the client talking to the same bad peer. The
+/// `banworthy_*` tests pin the wording of each category.
 pub fn is_banworthy_peer_error(err: &Error) -> bool {
     match err {
         Error::Crypto(msg) => {
@@ -224,6 +230,15 @@ pub fn is_banworthy_peer_error(err: &Error) -> bool {
                 || m.contains("output_root")
                 || m.contains("parent_hashes")
                 || m.contains("pmmr")
+                // Peer sent something the protocol does not allow: bad magic, an
+                // oversized frame, or a batch that cannot advance the leaf cursor.
+                || m.contains("protocol violation")
+                // Peer's mwebheader is not bound to the block we asked about.
+                || m.contains("anchor")
+                // Decode rejections from the bounded codecs in `p2p`.
+                || m.contains("exceeds max")
+                || m.contains("mwebutxos")
+                || m.contains("mwebleafset")
                 || m.contains("connection")
                 || m.contains("broken pipe")
                 || m.contains("reset by peer")
@@ -613,7 +628,7 @@ pub struct MwebSyncer {
 impl Default for MwebSyncer {
     fn default() -> Self {
         Self {
-            verify: VerifyMode::HeaderAndPmmr,
+            verify: VerifyMode::default(),
             batch_size: DEFAULT_UTXO_BATCH,
             fine_window: FINE_WINDOW,
             dating: DatingMode::FineWindow,
@@ -624,7 +639,7 @@ impl Default for MwebSyncer {
 }
 
 impl MwebSyncer {
-    /// Construct with defaults ([`VerifyMode::HeaderAndPmmr`], fine window [`FINE_WINDOW`]).
+    /// Construct with defaults ([`VerifyMode::default`], fine window [`FINE_WINDOW`]).
     pub fn new() -> Self {
         Self::default()
     }
@@ -746,8 +761,15 @@ impl MwebSyncer {
 
         self.sample_fine_headers(headers, source, state, tip_height)?;
 
-        let header_msg = if matches!(self.verify, VerifyMode::HeaderAndPmmr) {
-            Some(source.get_header(tip_hash)?)
+        let header_msg = if self.verify.needs_header() {
+            let msg = source.get_header(tip_hash)?;
+            if self.verify.is_anchored() {
+                // `tip_hash` comes from `headers`, a chain the caller trusts
+                // independently of this peer, so this is what makes the roots below
+                // the chain's rather than the peer's.
+                msg.verify_anchored(tip_hash)?;
+            }
+            Some(msg)
         } else {
             None
         };
@@ -868,10 +890,9 @@ impl MwebSyncer {
                         return Ok(());
                     }
                     if idx_i >= indices.len() || batch.start_index != indices[idx_i] {
-                        return Err(Error::Crypto(
-                            "pipelined UTXO schedule out of sync".into(),
-                        ));
+                        return Err(Error::Crypto("pipelined UTXO schedule out of sync".into()));
                     }
+                    check_batch_advances(&batch, batch.start_index)?;
                     batch_i += 1;
                     #[cfg(feature = "std")]
                     if batch_i == 1 || batch_i % 10 == 0 {
@@ -881,12 +902,9 @@ impl MwebSyncer {
                             indices.len() - idx_i
                         );
                     }
-                    match self.verify {
-                        VerifyMode::Trusted => verify_parent_hashes_present(&batch)?,
-                        VerifyMode::HeaderAndPmmr => {
-                            let hdr = mweb_header.as_ref().expect("header fetched");
-                            verify_utxo_batch(&batch, &leafset, hdr)?;
-                        }
+                    match mweb_header.as_ref() {
+                        Some(hdr) => verify_utxo_batch(&batch, &leafset, hdr)?,
+                        None => verify_parent_hashes_present(&batch)?,
                     }
                     let mut entries: Vec<(u64, Output)> = Vec::new();
                     for entry in &batch.utxos {
@@ -907,8 +925,15 @@ impl MwebSyncer {
                     })?;
                     result.found.extend(found);
                     result.downloaded = result.downloaded.saturating_add(batch.utxos.len());
+                    let before = idx_i;
                     while idx_i < indices.len() && indices[idx_i] <= last_leaf {
                         idx_i += 1;
+                    }
+                    if idx_i == before {
+                        return Err(Error::Crypto(
+                            "peer protocol violation: mwebutxos batch did not advance the leaf cursor"
+                                .into(),
+                        ));
                     }
                     state.utxo_cursor = Some(last_leaf);
                     publish_progress(idx_i - idx_start);
@@ -926,7 +951,9 @@ impl MwebSyncer {
             };
             #[cfg(feature = "std")]
             if let Err(ref e) = pipeline_res {
-                eprintln!("warn: pipelined UTXO download interrupted ({e}); continuing sequentially");
+                eprintln!(
+                    "warn: pipelined UTXO download interrupted ({e}); continuing sequentially"
+                );
             }
             let _ = pipeline_res;
         }
@@ -954,12 +981,9 @@ impl MwebSyncer {
                 if batch.output_format != OUTPUT_FORMAT_FULL {
                     return Err(Error::Crypto("expected FULL_UTXO format".into()));
                 }
-                let verify_res = match self.verify {
-                    VerifyMode::Trusted => verify_parent_hashes_present(&batch),
-                    VerifyMode::HeaderAndPmmr => {
-                        let hdr = mweb_header.as_ref().expect("header fetched");
-                        verify_utxo_batch(&batch, &leafset, hdr)
-                    }
+                let verify_res = match mweb_header.as_ref() {
+                    Some(hdr) => verify_utxo_batch(&batch, &leafset, hdr),
+                    None => verify_parent_hashes_present(&batch),
                 };
                 match verify_res {
                     Ok(()) => break batch,
@@ -988,6 +1012,7 @@ impl MwebSyncer {
                 publish_progress(idx_i - idx_start);
                 continue;
             }
+            check_batch_advances(&batch, start)?;
             let mut entries: Vec<(u64, Output)> = Vec::new();
             for entry in &batch.utxos {
                 if !added_set.contains(&entry.leaf_index) {
@@ -1005,8 +1030,15 @@ impl MwebSyncer {
             result.found.extend(found);
             result.downloaded = result.downloaded.saturating_add(batch.utxos.len());
 
+            let before = idx_i;
             while idx_i < indices.len() && indices[idx_i] <= last_leaf {
                 idx_i += 1;
+            }
+            if idx_i == before {
+                return Err(Error::Crypto(
+                    "peer protocol violation: mwebutxos batch did not advance the leaf cursor"
+                        .into(),
+                ));
             }
             state.utxo_cursor = Some(last_leaf);
             publish_progress(idx_i - idx_start);
@@ -1427,6 +1459,169 @@ mod tests {
         assert_eq!(
             state.leafset,
             MwebLeafset::from_indices(hash_b, &[0, 1, 2, 3]).leafset
+        );
+    }
+
+    /// Always serves a batch that fails PMMR verification, counting requests.
+    ///
+    /// The sequential loop halves `req_size` and retries whenever verification fails
+    /// with a message suggesting the PMMR segment was too wide. A peer can fail
+    /// verification on purpose, so the retry has to bottom out rather than let the
+    /// peer choose how many round-trips we make.
+    struct AlwaysFailsVerify {
+        leafset: MwebLeafset,
+        header: crate::p2p::MwebHeaderMsg,
+        output: crate::p2p::MwebUtxoEntry,
+        utxo_calls: usize,
+    }
+
+    impl crate::lip0006::MwebUtxoSource for AlwaysFailsVerify {
+        fn get_header(
+            &mut self,
+            _block_hash: BlockHash,
+        ) -> Result<crate::p2p::MwebHeaderMsg, Error> {
+            Ok(self.header.clone())
+        }
+
+        fn get_leafset(&mut self, _block_hash: BlockHash) -> Result<MwebLeafset, Error> {
+            Ok(self.leafset.clone())
+        }
+
+        fn get_utxos(&mut self, req: GetMwebUtxos) -> Result<crate::p2p::MwebUtxos, Error> {
+            self.utxo_calls += 1;
+            assert!(
+                self.utxo_calls < 1000,
+                "retry loop is unbounded: {} requests for one batch",
+                self.utxo_calls
+            );
+            Ok(crate::p2p::MwebUtxos {
+                block_hash: req.block_hash,
+                start_index: req.start_index,
+                output_format: OUTPUT_FORMAT_FULL,
+                utxos: vec![self.output.clone()],
+                parent_hashes: Vec::new(),
+            })
+        }
+    }
+
+    /// F-V11: a peer that always fails verification must not be able to drive an
+    /// unbounded number of round-trips. `req_size` halves per failure and stops at 1,
+    /// so the work is logarithmic in `batch_size`, not attacker-chosen.
+    #[cfg(feature = "std")]
+    #[test]
+    fn verify_failure_retry_is_bounded_by_log_of_batch_size() {
+        use crate::keys::{MasterKeyScheme, MasterKeys};
+        use bitcoin::secp256k1::{PublicKey, SecretKey};
+
+        let secp = Secp256k1::new();
+        let keys = MasterKeys::from_seed(
+            &[7u8; 64],
+            bitcoin::Network::Regtest,
+            MasterKeyScheme::LitecoinCore,
+            &secp,
+        )
+        .unwrap();
+        let book = AddressBook::from_keys(&keys, 2, &secp).unwrap();
+
+        let hash = BlockHash::from_byte_array([0xaa; 32]);
+        let leafset = MwebLeafset::from_indices(hash, &[0]);
+        let pk = PublicKey::from_secret_key(&secp, &SecretKey::from_slice(&[1u8; 32]).unwrap());
+
+        // Header commits to a root the served output cannot produce, so every batch
+        // fails verification no matter how small the request is.
+        let header = crate::p2p::MwebHeaderMsg {
+            merkle: bitcoin::MerkleBlock {
+                header: bitcoin::block::Header {
+                    version: bitcoin::block::Version::ONE,
+                    prev_blockhash: BlockHash::from_byte_array([0; 32]),
+                    merkle_root: bitcoin::TxMerkleNode::from_byte_array([0; 32]),
+                    time: 0,
+                    bits: bitcoin::CompactTarget::from_consensus(0),
+                    nonce: 0,
+                },
+                txn: bitcoin::merkle_tree::PartialMerkleTree::from_txids(
+                    &[bitcoin::Txid::from_byte_array([1u8; 32])],
+                    &[true],
+                ),
+            },
+            hogex: bitcoin::Transaction {
+                version: bitcoin::transaction::Version::ONE,
+                lock_time: bitcoin::absolute::LockTime::ZERO,
+                input: vec![],
+                output: vec![],
+                mw_tx: None,
+                is_hog_ex: false,
+            },
+            mweb_header: bitcoin::blockdata::block::MwebBlockHeader {
+                height: 11,
+                output_root: [0xEE; 32],
+                kernel_root: [0; 32],
+                leafset_root: crate::hash::blake3_hash(&leafset.leafset),
+                kernel_offset: [0; 32],
+                stealth_offset: [0; 32],
+                output_mmr_size: 1,
+                kernel_mmr_size: 1,
+            },
+        };
+
+        let mut source = AlwaysFailsVerify {
+            leafset,
+            header,
+            output: crate::p2p::MwebUtxoEntry {
+                leaf_index: 0,
+                output: bitcoin::blockdata::mimblewimble::Output {
+                    commitment: [3u8; 33],
+                    sender_public_key: pk,
+                    receiver_public_key: pk,
+                    message: bitcoin::blockdata::mimblewimble::OutputMessage {
+                        features: 0,
+                        standard_fields: None,
+                        extra_data: Vec::new(),
+                    },
+                    range_proof: [4u8; 675],
+                    signature: [5u8; 64],
+                },
+            },
+            utxo_calls: 0,
+        };
+
+        let batch_size = 1024u16;
+        let syncer = MwebSyncer {
+            verify: crate::lip0006::VerifyMode::HeaderAndPmmr,
+            batch_size,
+            ..MwebSyncer::tip_only()
+        };
+        let headers = FixedHeaderProvider::tip_only(hash, 11);
+        let mut notifier = ReadyNotifier { tip_height: 11 };
+        let mut db = MwebCoinDatabase::new();
+        let mut state = SyncState::default();
+
+        let err = syncer
+            .run_once(
+                &headers,
+                &mut notifier,
+                &mut source,
+                &mut state,
+                &keys,
+                &book,
+                &mut db,
+                &secp,
+                None,
+            )
+            .expect_err("a batch that never verifies must fail the pass");
+
+        // Halving 1024 → 1 is 11 steps; allow the pipelined attempt plus a little
+        // slack, but stay far below anything an attacker could call a DoS.
+        let ceiling = (batch_size.ilog2() as usize) + 4;
+        assert!(
+            source.utxo_calls <= ceiling,
+            "peer forced {} requests for one batch (ceiling {ceiling})",
+            source.utxo_calls
+        );
+        // And the failure must rotate the peer rather than being retried forever.
+        assert!(
+            is_banworthy_peer_error(&err),
+            "a PMMR verification failure should ban the peer, got {err}"
         );
     }
 

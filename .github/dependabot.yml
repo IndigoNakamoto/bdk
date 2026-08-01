@@ -1,8 +1,41 @@
-# Set update schedule for GitHub Actions
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      # Check for updates to GitHub Actions every week
       interval: "weekly"
+    # Actions are SHA-pinned; without this, Dependabot cannot tell which
+    # version a bare SHA corresponds to and stops proposing updates.
+    commit-message:
+      prefix: "ci"
+
+  # Cargo was previously uncovered, so an advisory in a direct dependency only
+  # surfaced through the nightly `cargo audit` run, with nobody assigned to it.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    groups:
+      # One PR for the routine churn, so consensus-critical crates stand alone
+      # and get read properly.
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+        exclude-patterns:
+          - "grin_secp256k1zkp"
+          - "litecoin"
+          - "chacha20poly1305"
+          - "blake3"
+          - "zeroize"
+
+  # The fuzz harness is its own workspace (it needs a release profile with
+  # overflow checks), so the root entry above does not see it.
+  - package-ecosystem: "cargo"
+    directory: "/crates/mweb/fuzz"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "deps(fuzz)"

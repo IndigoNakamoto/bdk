@@ -14,6 +14,7 @@ use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::{All, PublicKey, Scalar, SecretKey};
 use bitcoin::transaction::Version;
 use bitcoin::{Address, NetworkKind, ScriptBuf, Transaction, TxIn, TxOut};
+use zeroize::Zeroizing;
 
 use crate::coin_db::MwebCoin;
 use crate::crypto::{
@@ -233,9 +234,12 @@ fn assemble_body(
     pegouts: &[(ScriptBuf, u64)],
     secp: &Secp256k1<All>,
 ) -> Result<AssembledBody, Error> {
+    // Every blinding factor and one-time key below is spend-equivalent while it
+    // is live. `Zeroizing` wipes the backing buffer when each vector drops; see
+    // `crate::secret` for why that is best effort only.
     let mut outputs = Vec::with_capacity(recipients.len());
-    let mut out_blinds = Vec::with_capacity(recipients.len());
-    let mut out_keys = Vec::with_capacity(recipients.len());
+    let mut out_blinds = Zeroizing::new(Vec::with_capacity(recipients.len()));
+    let mut out_keys = Zeroizing::new(Vec::with_capacity(recipients.len()));
     let mut change_coin = None;
 
     for (i, (addr, amount)) in recipients.iter().enumerate() {
@@ -276,15 +280,15 @@ fn assemble_body(
     }
 
     let mut inputs = Vec::with_capacity(input_coins.len());
-    let mut in_blinds = Vec::with_capacity(input_coins.len());
-    let mut in_keys_pos = Vec::with_capacity(input_coins.len());
-    let mut in_keys_neg = Vec::with_capacity(input_coins.len());
+    let mut in_blinds = Zeroizing::new(Vec::with_capacity(input_coins.len()));
+    let mut in_keys_pos = Zeroizing::new(Vec::with_capacity(input_coins.len()));
+    let mut in_keys_neg = Zeroizing::new(Vec::with_capacity(input_coins.len()));
     let mut spent_output_ids = Vec::with_capacity(input_coins.len());
 
     for coin in input_coins {
-        let spend_key = coin.spend_key.ok_or(Error::MissingCoinSecrets)?;
+        let spend_key = Zeroizing::new(coin.spend_key.ok_or(Error::MissingCoinSecrets)?);
         let switched = blind_switch(&coin.blind, coin.amount, secp)?;
-        let ephemeral = random_secret(secp);
+        let ephemeral = Zeroizing::new(random_secret(secp));
         let input = create_input(
             &coin.output_id,
             &coin.commitment,
@@ -293,8 +297,8 @@ fn assemble_body(
             secp,
         )?;
         in_blinds.push(switched);
-        in_keys_pos.push(ephemeral);
-        in_keys_neg.push(spend_key);
+        in_keys_pos.push(*ephemeral);
+        in_keys_neg.push(*spend_key);
         spent_output_ids.push(coin.output_id);
         inputs.push(input);
     }
@@ -304,15 +308,15 @@ fn assemble_body(
     let pos = out_blinds;
     let mut neg = in_blinds;
     neg.push(kernel_offset);
-    let kernel_blind = if pos.is_empty() {
+    let kernel_blind = Zeroizing::new(if pos.is_empty() {
         // outs = 0 → kernel_blind = -(ins + offset)
-        let sum_neg = blind_sum(&neg, &[])?;
-        blind_sum(&[], &[sum_neg])?
+        let sum_neg = Zeroizing::new(blind_sum(&neg, &[])?);
+        blind_sum(&[], &[*sum_neg])?
     } else {
         blind_sum(&pos, &neg)?
-    };
+    });
 
-    let stealth_blind = random_secret(secp);
+    let stealth_blind = Zeroizing::new(random_secret(secp));
     let pegout_coins: Vec<PegOutCoin> = pegouts
         .iter()
         .map(|(spk, amt)| PegOutCoin {
@@ -322,8 +326,8 @@ fn assemble_body(
         .collect();
 
     let kernel = create_kernel(
-        kernel_blind,
-        Some(stealth_blind),
+        *kernel_blind,
+        Some(*stealth_blind),
         Some(fee as i64),
         pegin,
         &pegout_coins,
@@ -331,9 +335,9 @@ fn assemble_body(
     )?;
 
     let mut stealth_pos = out_keys;
-    stealth_pos.extend(in_keys_pos);
+    stealth_pos.extend_from_slice(&in_keys_pos);
     let mut stealth_neg = in_keys_neg;
-    stealth_neg.push(stealth_blind);
+    stealth_neg.push(*stealth_blind);
     let stealth_offset = if stealth_pos.is_empty() {
         // No output/ephemeral keys: stealth_offset = -stealth_blind
         blind_sum(&[], &stealth_neg)?
@@ -485,8 +489,8 @@ pub fn create_input(
     key_hasher.update(&output_pk.serialize());
     let key_hash = *key_hasher.finalize().as_bytes();
 
-    let ko_term = secret_mul(output_key, &key_hash)?;
-    let sig_key = secret_add(input_key, &ko_term)?;
+    let ko_term = Zeroizing::new(secret_mul(output_key, &key_hash)?);
+    let sig_key = Zeroizing::new(secret_add(input_key, &ko_term)?);
 
     let mut msg_hasher = blake3::Hasher::new();
     msg_hasher.update(&[features]);
@@ -553,17 +557,18 @@ pub fn create_kernel(
     }
 
     let excess = pedersen_commit(0, &blind, secp)?;
-    let mut sig_key = blind;
+    let mut sig_key = Zeroizing::new(blind);
     let stealth_excess = if let Some(sb) = stealth_blind {
-        let sb_sk = SecretKey::from_slice(&sb)?;
+        let sb = Zeroizing::new(sb);
+        let sb_sk = SecretKey::from_slice(sb.as_slice())?;
         let stealth_pk = PublicKey::from_secret_key(secp, &sb_sk);
         let excess_pk = commitment_to_pubkey(&excess)?;
         let mut h = blake3::Hasher::new();
         h.update(&excess_pk.serialize());
         h.update(&stealth_pk.serialize());
         let h_hash = *h.finalize().as_bytes();
-        let mul = secret_mul(&blind, &h_hash)?;
-        sig_key = secret_add(&mul, &sb)?;
+        let mul = Zeroizing::new(secret_mul(&blind, &h_hash)?);
+        sig_key = Zeroizing::new(secret_add(&mul, &sb)?);
         Some(stealth_pk)
     } else {
         None

@@ -1,0 +1,49 @@
+name: Supply chain
+
+# `cargo audit` already runs nightly in audit.yml. This job adds what audit does
+# not check: licenses, banned crates, and — the reason it exists — the source
+# registry of every dependency. `unknown-git = "deny"` in deny.toml means a new
+# git dependency slipped into a routine bump fails CI instead of shipping.
+on:
+  push:
+    paths:
+      - '.github/workflows/supply_chain.yml'
+      - 'deny.toml'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+  pull_request:
+    paths:
+      - '.github/workflows/supply_chain.yml'
+      - 'deny.toml'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+  # Weekly, matching ltc-wallet-mac. Advisories land against unchanged lockfiles.
+  schedule:
+    - cron: '0 6 * * 1' # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  cargo-deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@1beb33eee6d086258184383af9a538940be190ed # v2.85.6
+        with:
+          tool: cargo-deny
+      - name: cargo deny (workspace)
+        run: cargo deny check advisories bans licenses sources
+      # The fuzz harness is excluded from the workspace, so the check above
+      # never sees its lockfile. It builds nothing that ships, but it does pull
+      # honggfuzz and its transitive tree onto developer machines.
+      - name: cargo deny (fuzz harness)
+        working-directory: ./crates/mweb/fuzz
+        run: cargo deny --config ../../../deny.toml check advisories bans licenses sources
