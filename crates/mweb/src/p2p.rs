@@ -6,6 +6,9 @@
 //! **Note:** `mwebutxos` follows litecoind's on-wire layout (`block_hash`, `start_index`,
 //! …), which differs slightly from the LIP-0006 table (litecoind is authoritative for P2P).
 
+// Every byte handled here is peer-controlled; a reachable panic is a remote DoS.
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use alloc::vec::Vec;
 
 use bitcoin::blockdata::block::{BlockHash, MwebBlockHeader};
@@ -201,13 +204,12 @@ impl MwebHeaderMsg {
     /// The chain of custody this establishes, each link verified on regtest by
     /// `tests/mweb_anchoring.rs`:
     ///
-    /// 1. `merkle.header` hashes to `block_hash`, which the caller obtained from its
-    ///    own trusted header chain rather than from this peer.
-    /// 2. The partial merkle tree reproduces `merkle.header.merkle_root`, so the
-    ///    txids it yields really are in that block.
-    /// 3. The supplied HogEx is one of those txids, at the final position. Litecoin
-    ///    consensus places the HogEx last, so position plus merkle inclusion
-    ///    identifies it uniquely.
+    /// 1. `merkle.header` hashes to `block_hash`, which the caller obtained from its own trusted
+    ///    header chain rather than from this peer.
+    /// 2. The partial merkle tree reproduces `merkle.header.merkle_root`, so the txids it yields
+    ///    really are in that block.
+    /// 3. The supplied HogEx is one of those txids, at the final position. Litecoin consensus
+    ///    places the HogEx last, so position plus merkle inclusion identifies it uniquely.
     /// 4. Its first output commits to `blake3(mweb_header)`.
     ///
     /// Note that `Transaction::is_hog_ex` is deliberately *not* relied on. It comes
@@ -216,7 +218,7 @@ impl MwebHeaderMsg {
     /// check is what actually identifies the HogEx.
     pub fn verify_anchored(&self, block_hash: BlockHash) -> Result<(), Error> {
         if self.merkle.header.block_hash() != block_hash {
-            return Err(Error::Crypto(alloc::format!(
+            return Err(Error::bad_proof(alloc::format!(
                 "mwebheader anchor: merkle block is for {}, expected {block_hash}",
                 self.merkle.header.block_hash()
             )));
@@ -227,28 +229,28 @@ impl MwebHeaderMsg {
         self.merkle
             .extract_matches(&mut txids, &mut indexes)
             .map_err(|e| {
-                Error::Crypto(alloc::format!(
+                Error::bad_proof(alloc::format!(
                     "mwebheader anchor: partial merkle tree invalid: {e:?}"
                 ))
             })?;
 
         let hogex_txid = self.hogex.compute_txid();
         let Some(slot) = txids.iter().position(|t| *t == hogex_txid) else {
-            return Err(Error::Crypto(
-                "mwebheader anchor: HogEx is not proven to be in the block".into(),
+            return Err(Error::bad_proof(
+                "mwebheader anchor: HogEx is not proven to be in the block",
             ));
         };
         let num_txs = self.merkle.txn.num_transactions();
         if indexes[slot] + 1 != num_txs {
-            return Err(Error::Crypto(alloc::format!(
+            return Err(Error::bad_proof(alloc::format!(
                 "mwebheader anchor: HogEx is at index {} of {num_txs}, expected last",
                 indexes[slot]
             )));
         }
 
         let Some(out) = self.hogex.output.first() else {
-            return Err(Error::Crypto(
-                "mwebheader anchor: HogEx has no outputs, so no header commitment".into(),
+            return Err(Error::bad_proof(
+                "mwebheader anchor: HogEx has no outputs, so no header commitment",
             ));
         };
         let spk = out.script_pubkey.as_bytes();
@@ -256,14 +258,14 @@ impl MwebHeaderMsg {
             || spk[0] != HOGEX_COMMITMENT_OPCODE
             || spk[1] != 32
         {
-            return Err(Error::Crypto(
-                "mwebheader anchor: HogEx vout[0] is not an MWEB header commitment script".into(),
+            return Err(Error::bad_proof(
+                "mwebheader anchor: HogEx vout[0] is not an MWEB header commitment script",
             ));
         }
         let expected = header_hash(&self.mweb_header);
         if spk[2..] != expected {
-            return Err(Error::Crypto(
-                "mwebheader anchor: HogEx does not commit to this mweb_header".into(),
+            return Err(Error::bad_proof(
+                "mwebheader anchor: HogEx does not commit to this mweb_header",
             ));
         }
         Ok(())
@@ -363,7 +365,7 @@ impl MwebLeafset {
             for bit in 0..8u64 {
                 if byte & (1 << (7 - bit)) != 0 {
                     if out.len() == max {
-                        return Err(Error::Crypto(alloc::format!(
+                        return Err(Error::protocol(alloc::format!(
                             "leafset has more than {max} unspent leaves"
                         )));
                     }
@@ -422,6 +424,8 @@ pub fn mweb_inv(inv_type: u32, hash: BlockHash) -> bitcoin::p2p::message_blockda
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::hashes::Hash;

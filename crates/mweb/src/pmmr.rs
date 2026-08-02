@@ -4,11 +4,27 @@
 //! untagged BLAKE3 over `uint64_le(position) || left || right`. Leaf hashes follow Core
 //! `Leaf::CalcHash`: BLAKE3 over `uint64_le(position) || CompactSize(len) || leaf_data`
 //! (Bitcoin `Serialize` of `vector<uint8_t>`).
+//!
+//! # What PMMR inclusion does and does not prove
+//!
+//! Nothing here verifies an output's rangeproof or signature. The trust argument
+//! is: `output_id` hashes the full output *including* its rangeproof and
+//! signature, so inclusion of that leaf under an `output_root` that is itself
+//! bound to the block (see [`crate::p2p::MwebHeaderMsg::verify_anchored`] /
+//! [`crate::lip0006::VerifyMode::Anchored`]) means full nodes already validated
+//! those proofs under consensus. That argument only holds in `Anchored` mode; in
+//! `HeaderAndPmmr` the roots are the peer's own, and in `Trusted` there is no
+//! root check at all — pair those modes with
+//! [`crate::mweb_sync::MwebSyncer::verify_rangeproofs`] or an external
+//! cross-check.
+
+// Verification inputs are peer-controlled; a reachable panic is a remote DoS.
+#![deny(clippy::unwrap_used, clippy::expect_used)]
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
-use bitcoin::blockdata::block::MwebBlockHeader;
+use bitcoin::blockdata::block::{BlockHash, MwebBlockHeader};
 use bitcoin::blockdata::mimblewimble::Output;
 
 use crate::error::Error;
@@ -103,18 +119,23 @@ impl Index {
         }
     }
 
-    fn left_child(self) -> Self {
-        Self {
-            position: self.position - (1u64 << self.height),
-            height: self.height - 1,
-        }
+    /// Left child of a non-leaf node, or `None` on an index whose arithmetic
+    /// would underflow (a leaf, or an adversarial position/height pairing).
+    fn left_child(self) -> Option<Self> {
+        let offset = 1u64.checked_shl(u32::try_from(self.height).ok()?)?;
+        Some(Self {
+            position: self.position.checked_sub(offset)?,
+            height: self.height.checked_sub(1)?,
+        })
     }
 
-    fn right_child(self) -> Self {
-        Self {
-            position: self.position - 1,
-            height: self.height - 1,
-        }
+    /// Right child of a non-leaf node, or `None` when the subtraction would
+    /// underflow.
+    fn right_child(self) -> Option<Self> {
+        Some(Self {
+            position: self.position.checked_sub(1)?,
+            height: self.height.checked_sub(1)?,
+        })
     }
 
     fn next(self) -> Self {
@@ -164,33 +185,45 @@ impl MemMmr {
         self.hashes.push(hash);
         self.num_leaves += 1;
 
+        // `last` is always the hash most recently pushed, which is the right
+        // child of the next parent to fill in.
+        let mut last = hash;
         let mut next = Index::at(leaf_position(leaf_index)).next();
         while !next.is_leaf() {
-            let left = self.hash_at(next.left_child().position);
-            let right = *self.hashes.last().expect("parent has right child");
-            self.hashes.push(parent_hash(next.position, &left, &right));
+            // Both lookups are structurally infallible for an MMR built by this
+            // method; bail out rather than panic if that ever stops holding.
+            let Some(left) = next.left_child().and_then(|c| self.hash_at(c.position)) else {
+                break;
+            };
+            let parent = parent_hash(next.position, &left, &last);
+            self.hashes.push(parent);
+            last = parent;
             next = next.next();
         }
         leaf_index
     }
 
-    fn hash_at(&self, position: u64) -> [u8; 32] {
-        self.hashes[position as usize]
+    fn hash_at(&self, position: u64) -> Option<[u8; 32]> {
+        self.hashes.get(usize::try_from(position).ok()?).copied()
     }
 
     /// Bag-the-peaks root (Core `IMMR::Root`).
+    ///
+    /// Returns the all-zero "empty MMR" root if a peak hash is missing, which is
+    /// unreachable for an MMR built through [`Self::add_output_id`].
     pub fn root(&self) -> [u8; 32] {
         let num_nodes = num_nodes_for_leaves(self.num_leaves);
         if num_nodes == 0 {
             return [0u8; 32];
         }
-        bag_peaks(
-            &peak_indices(num_nodes)
-                .into_iter()
-                .map(|idx| self.hash_at(idx.position))
-                .collect::<Vec<_>>(),
-            num_nodes,
-        )
+        let peaks: Option<Vec<[u8; 32]>> = peak_indices(num_nodes)
+            .into_iter()
+            .map(|idx| self.hash_at(idx.position))
+            .collect();
+        match peaks {
+            Some(hashes) => bag_peaks(&hashes, num_nodes),
+            None => [0u8; 32],
+        }
     }
 
     /// Number of leaves.
@@ -242,20 +275,38 @@ pub fn verify_leafset(
     output_mmr_size: u64,
 ) -> Result<(), Error> {
     if output_mmr_size > MAX_OUTPUT_MMR_SIZE {
-        return Err(Error::Crypto(alloc::format!(
+        return Err(Error::protocol(alloc::format!(
             "leafset: output_mmr_size {output_mmr_size} exceeds MAX_OUTPUT_MMR_SIZE"
         )));
     }
     let need = output_mmr_size.div_ceil(8) as usize;
     if leafset.leafset.len() < need {
-        return Err(Error::Crypto("leafset shorter than output_mmr_size".into()));
+        return Err(Error::protocol("leafset shorter than output_mmr_size"));
     }
     // Hash exactly `need` bytes (Core `ILeafSet::Root`).
     let digest = blake3_hash(&leafset.leafset[..need]);
     if &digest != leafset_root {
-        return Err(Error::Crypto("leafset_root mismatch".into()));
+        return Err(Error::bad_proof("leafset_root mismatch"));
     }
     Ok(())
+}
+
+/// [`verify_leafset`] plus a check that the leafset claims to be for `block_hash`.
+///
+/// `verify_leafset` alone leaves `leafset.block_hash` unchecked, which makes its
+/// contract weaker than it looks: a peer could answer with a (root-valid) leafset
+/// for a different block. Callers that know which block they asked for should use
+/// this variant.
+pub fn verify_leafset_at(
+    leafset: &MwebLeafset,
+    block_hash: BlockHash,
+    leafset_root: &[u8; 32],
+    output_mmr_size: u64,
+) -> Result<(), Error> {
+    if leafset.block_hash != block_hash {
+        return Err(Error::protocol("leafset block_hash mismatch"));
+    }
+    verify_leafset(leafset, leafset_root, output_mmr_size)
 }
 
 fn bitset_test(leafset: &[u8], idx: u64) -> bool {
@@ -305,14 +356,14 @@ fn calc_pruned_parents(unspent: &[u8], num_leaves: u64) -> BTreeSet<u64> {
             if next.position > last_node_pos {
                 break;
             }
-            let right = next.right_child();
-            if ret.contains(&right.position) {
-                let left = next.left_child();
-                if ret.contains(&left.position) {
-                    ret.remove(&right.position);
-                    ret.remove(&left.position);
-                    ret.insert(next.position);
-                }
+            // `next.height >= 1` by construction, so both children exist.
+            let (Some(right), Some(left)) = (next.right_child(), next.left_child()) else {
+                continue;
+            };
+            if ret.contains(&right.position) && ret.contains(&left.position) {
+                ret.remove(&right.position);
+                ret.remove(&left.position);
+                ret.insert(next.position);
             }
         }
         height += 1;
@@ -415,11 +466,11 @@ pub fn verify_utxo_batch(
     }
     let num_leaves = header.output_mmr_size;
     if num_leaves == 0 {
-        return Err(Error::Crypto("empty output MMR".into()));
+        return Err(Error::protocol("empty output MMR"));
     }
     // Bound the loops below before they are sized by a peer-supplied value.
     if num_leaves > MAX_OUTPUT_MMR_SIZE {
-        return Err(Error::Crypto(alloc::format!(
+        return Err(Error::protocol(alloc::format!(
             "pmmr: output_mmr_size {num_leaves} exceeds MAX_OUTPUT_MMR_SIZE"
         )));
     }
@@ -431,13 +482,13 @@ pub fn verify_utxo_batch(
         .windows(2)
         .any(|w| w[0].leaf_index >= w[1].leaf_index)
     {
-        return Err(Error::Crypto(
-            "pmmr: mwebutxos leaf indices are not strictly ascending".into(),
+        return Err(Error::protocol(
+            "pmmr: mwebutxos leaf indices are not strictly ascending",
         ));
     }
     let need = num_leaves.div_ceil(8) as usize;
     if leafset.leafset.len() < need {
-        return Err(Error::Crypto("leafset too short for PMMR verify".into()));
+        return Err(Error::protocol("leafset too short for PMMR verify"));
     }
     let bits = &leafset.leafset[..need];
 
@@ -447,13 +498,13 @@ pub fn verify_utxo_batch(
         // further down, and the reason it is safe should be stated where it is
         // established.
         if entry.leaf_index >= num_leaves {
-            return Err(Error::Crypto(alloc::format!(
+            return Err(Error::protocol(alloc::format!(
                 "pmmr: leaf_index {} is beyond output_mmr_size {num_leaves}",
                 entry.leaf_index
             )));
         }
         if !bitset_test(bits, entry.leaf_index) {
-            return Err(Error::Crypto("utxo leaf_index not set in leafset".into()));
+            return Err(Error::bad_proof("utxo leaf_index not set in leafset"));
         }
     }
 
@@ -499,11 +550,10 @@ fn verify_segment_root(
     num_leaves: u64,
     output_root: &[u8; 32],
 ) -> Result<(), Error> {
-    if leaf_hashes.is_empty() {
-        return Ok(());
-    }
-    let first_leaf = leaf_hashes.first().unwrap().0;
-    let last_leaf = leaf_hashes.last().unwrap().0;
+    let (first_leaf, last_leaf) = match (leaf_hashes.first(), leaf_hashes.last()) {
+        (Some(first), Some(last)) => (first.0, last.0),
+        _ => return Ok(()),
+    };
     let hash_indices: Vec<u64> = calc_hash_indices(unspent_bits, num_leaves, first_leaf, last_leaf)
         .into_iter()
         .collect();
@@ -517,7 +567,7 @@ fn verify_segment_root(
     } else if hash_indices.is_empty() && parent_hashes.len() <= 1 {
         (&[][..], parent_hashes.first().copied())
     } else {
-        return Err(Error::Crypto(alloc::format!(
+        return Err(Error::bad_proof(alloc::format!(
             "parent_hashes len {} != hash_indices {} (or +1 lower_peak)",
             parent_hashes.len(),
             hash_indices.len()
@@ -532,21 +582,24 @@ fn verify_segment_root(
         nodes.insert(*pos, *hash);
     }
 
+    // Fill parents bottom-up. In a PMMR both children of a node always sit at
+    // lower positions, so a single ascending pass reaches the fixpoint; the
+    // iteration count is bounded by `num_nodes`, which the callers cap at
+    // `MAX_OUTPUT_MMR_SIZE`-derived values before this runs.
     let num_nodes = num_nodes_for_leaves(num_leaves);
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for pos in 0..num_nodes {
-            let idx = Index::at(pos);
-            if idx.is_leaf() || nodes.contains_key(&pos) {
-                continue;
-            }
-            let left = idx.left_child().position;
-            let right = idx.right_child().position;
-            if let (Some(l), Some(r)) = (nodes.get(&left).copied(), nodes.get(&right).copied()) {
-                nodes.insert(pos, parent_hash(pos, &l, &r));
-                changed = true;
-            }
+    for pos in 0..num_nodes {
+        let idx = Index::at(pos);
+        if idx.is_leaf() || nodes.contains_key(&pos) {
+            continue;
+        }
+        let (Some(left), Some(right)) = (idx.left_child(), idx.right_child()) else {
+            continue;
+        };
+        if let (Some(l), Some(r)) = (
+            nodes.get(&left.position).copied(),
+            nodes.get(&right.position).copied(),
+        ) {
+            nodes.insert(pos, parent_hash(pos, &l, &r));
         }
     }
 
@@ -556,7 +609,7 @@ fn verify_segment_root(
         .iter()
         .find(|p| p.position >= last_node.position)
         .map(|p| p.position)
-        .ok_or_else(|| Error::Crypto("missing mountain peak".into()))?;
+        .ok_or_else(|| Error::bad_proof("missing mountain peak"))?;
 
     // Bag every peak from the left through the mountain that contains `last_leaf`.
     // Segments often span multiple mountains; skipping intermediate peaks (the old
@@ -568,7 +621,7 @@ fn verify_segment_root(
             break;
         }
         let h = nodes.get(&peak.position).ok_or_else(|| {
-            Error::Crypto(alloc::format!(
+            Error::bad_proof(alloc::format!(
                 "missing peak hash at {} for segment verify (leaves {first_leaf}..{last_leaf})",
                 peak.position
             ))
@@ -590,9 +643,9 @@ fn verify_segment_root(
             let mut all = left_and_mountain;
             for peak in &peaks {
                 if peak.position > mountain_peak_pos {
-                    let h = nodes.get(&peak.position).ok_or_else(|| {
-                        Error::Crypto("missing right peak (no lower_peak)".into())
-                    })?;
+                    let h = nodes
+                        .get(&peak.position)
+                        .ok_or_else(|| Error::bad_proof("missing right peak (no lower_peak)"))?;
                     all.push(*h);
                 }
             }
@@ -601,7 +654,7 @@ fn verify_segment_root(
     };
 
     if root != *output_root {
-        return Err(Error::Crypto(alloc::format!(
+        return Err(Error::bad_proof(alloc::format!(
             "output_root mismatch (leaves {first_leaf}..{last_leaf}, utxos={}, parent_hashes={})",
             leaf_hashes.len(),
             parent_hashes.len()
@@ -617,7 +670,7 @@ fn calc_bagged_peak(mmr: &MemMmr, peak_idx_pos: u64) -> Option<[u8; 32]> {
     let peaks = peak_indices(num_nodes);
     let mut bagged: Option<[u8; 32]> = None;
     for peak in peaks.iter().rev() {
-        let peak_hash = mmr.hash_at(peak.position);
+        let peak_hash = mmr.hash_at(peak.position)?;
         bagged = Some(match bagged {
             Some(b) => parent_hash(num_nodes, &peak_hash, &b),
             None => peak_hash,
@@ -630,8 +683,10 @@ fn calc_bagged_peak(mmr: &MemMmr, peak_idx_pos: u64) -> Option<[u8; 32]> {
 }
 
 /// Assemble Core-style segment parent hashes for tests.
+///
+/// `pub(crate)` so `mweb_sync` tests can serve honestly-proved partial batches.
 #[cfg(test)]
-fn assemble_parent_hashes(
+pub(crate) fn assemble_parent_hashes(
     mmr: &MemMmr,
     unspent_bits: &[u8],
     first_leaf: u64,
@@ -639,7 +694,10 @@ fn assemble_parent_hashes(
 ) -> Vec<[u8; 32]> {
     let num_leaves = mmr.num_leaves();
     let hash_indices = calc_hash_indices(unspent_bits, num_leaves, first_leaf, last_leaf);
-    let mut hashes: Vec<[u8; 32]> = hash_indices.iter().map(|pos| mmr.hash_at(*pos)).collect();
+    let mut hashes: Vec<[u8; 32]> = hash_indices
+        .iter()
+        .filter_map(|pos| mmr.hash_at(*pos))
+        .collect();
     let peaks = peak_indices(num_nodes_for_leaves(num_leaves));
     let last_node = Index::at(leaf_position(last_leaf));
     if let Some(mountain) = peaks.iter().find(|p| p.position >= last_node.position) {
@@ -662,6 +720,8 @@ pub fn leaf_hashes_for_outputs(entries: &[(u64, Output)]) -> Vec<[u8; 32]> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
     use bitcoin::hashes::Hash;
     use bitcoin::BlockHash;
@@ -819,6 +879,76 @@ mod tests {
             })
             .collect();
         verify_segment_root(&leaf_hashes, &parent_hashes, &bits, 15, &mmr.root()).unwrap();
+    }
+
+    /// F-V05: every single bit of every `parent_hashes` entry must be load-bearing.
+    /// A tolerated bit would mean part of the proof is outside the root computation.
+    #[test]
+    fn segment_rejects_any_parent_hash_bit_flip() {
+        let mmr = build_mmr(15);
+        let bits = all_unspent_bits(15);
+        let parent_hashes = assemble_parent_hashes(&mmr, &bits, 0, 3);
+        let leaf_hashes: Vec<(u64, [u8; 32])> = (0u64..=3)
+            .map(|i| {
+                let mut id = [0u8; 32];
+                id[..8].copy_from_slice(&i.to_le_bytes());
+                (i, leaf_hash(i, &id))
+            })
+            .collect();
+        verify_segment_root(&leaf_hashes, &parent_hashes, &bits, 15, &mmr.root())
+            .expect("honest segment must verify");
+
+        for entry in 0..parent_hashes.len() {
+            for byte in 0..32 {
+                for bit in 0..8 {
+                    let mut mutated = parent_hashes.clone();
+                    mutated[entry][byte] ^= 1 << bit;
+                    assert!(
+                        verify_segment_root(&leaf_hashes, &mutated, &bits, 15, &mmr.root())
+                            .is_err(),
+                        "flipping bit {bit} of byte {byte} in parent_hashes[{entry}] was accepted"
+                    );
+                }
+            }
+        }
+    }
+
+    /// F-V06: a proof with the wrong number of hashes, or the right hashes in the
+    /// wrong order, must be rejected rather than reinterpreted.
+    #[test]
+    fn segment_rejects_truncated_extended_or_reordered_parent_hashes() {
+        let mmr = build_mmr(15);
+        let bits = all_unspent_bits(15);
+        let parent_hashes = assemble_parent_hashes(&mmr, &bits, 0, 3);
+        assert!(parent_hashes.len() >= 2, "test needs proof + lower_peak");
+        let leaf_hashes: Vec<(u64, [u8; 32])> = (0u64..=3)
+            .map(|i| {
+                let mut id = [0u8; 32];
+                id[..8].copy_from_slice(&i.to_le_bytes());
+                (i, leaf_hash(i, &id))
+            })
+            .collect();
+
+        let mut truncated = parent_hashes.clone();
+        truncated.pop();
+        assert!(
+            verify_segment_root(&leaf_hashes, &truncated, &bits, 15, &mmr.root()).is_err(),
+            "a proof truncated by one hash was accepted"
+        );
+
+        let mut extended = parent_hashes.clone();
+        extended.push([0xAB; 32]);
+        assert!(
+            verify_segment_root(&leaf_hashes, &extended, &bits, 15, &mmr.root()).is_err(),
+            "a proof extended by one hash was accepted"
+        );
+
+        let mut reordered = parent_hashes.clone();
+        reordered.swap(0, 1);
+        assert!(
+            verify_segment_root(&leaf_hashes, &reordered, &bits, 15, &mmr.root()).is_err(),
+            "a reordered proof was accepted"
+        );
     }
 
     #[test]

@@ -81,6 +81,15 @@ test-regtest:
       bdk_electrum_client::test:: \
       -- --nocapture --test-threads=1
 
+# Briefly fuzz every bdk_mweb target, or one: `just fuzz rewind_output`.
+# Needs honggfuzz system deps (libunwind, binutils). RUN_TIME=secs per target.
+fuzz target="":
+    cd crates/mweb/fuzz && ./fuzz.sh {{target}}
+
+# Regenerate the checked-in fuzz seed corpus (crates/mweb/fuzz/hfuzz_input/).
+fuzz-corpus:
+    cd crates/mweb/fuzz && cargo run --bin gen_corpus
+
 # Run pre-push suite: format, check, and test
 pre-push: fmt check test
 

@@ -32,6 +32,34 @@ use crate::scan::output_id;
 /// Core change address index convention.
 pub const CHANGE_ADDRESS_INDEX: u32 = 0;
 
+/// Sum litoshi amounts, rejecting any total above [`crate::limits::MAX_MONEY`].
+///
+/// Coin amounts can originate from a peer (via scan), so totals must be treated
+/// as untrusted: a fabricated coin must produce an error here, not a wrapped or
+/// panicking sum. Bounding by `MAX_MONEY` subsumes the `u64` overflow check.
+pub(crate) fn checked_amount_total<I>(amounts: I) -> Result<u64, Error>
+where
+    I: IntoIterator<Item = u64>,
+{
+    let total = amounts
+        .into_iter()
+        .try_fold(0u64, |acc, a| acc.checked_add(a))
+        .ok_or_else(|| Error::Crypto("amount total overflows u64".into()))?;
+    if total > crate::limits::MAX_MONEY {
+        return Err(Error::Crypto("amount total exceeds MAX_MONEY".into()));
+    }
+    Ok(total)
+}
+
+/// Convert a litoshi amount to the `i64` kernel representation, rejecting values
+/// above [`crate::limits::MAX_MONEY`] (which also rules out `i64` wrap-around).
+pub(crate) fn money_to_i64(amount: u64, what: &str) -> Result<i64, Error> {
+    if amount > crate::limits::MAX_MONEY {
+        return Err(Error::Crypto(alloc::format!("{what} exceeds MAX_MONEY")));
+    }
+    Ok(amount as i64)
+}
+
 /// Finished MWEB spend (or peg-out) ready for broadcast.
 ///
 /// Prefer [`crate::fund_mweb_spend`] → [`crate::sign_funded_mweb`] → extract for the
@@ -117,12 +145,10 @@ impl MwebTxBuilder {
         network: NetworkKind,
         secp: &Secp256k1<All>,
     ) -> Result<FinishedMwebTx, Error> {
-        let input_total: u64 = self.inputs.iter().map(|c| c.amount).sum();
-        let recipient_total: u64 = self.recipients.iter().map(|(_, a)| *a).sum();
-        let pegout_total: u64 = self.pegouts.iter().map(|(_, a)| *a).sum();
-        let needed = recipient_total
-            .saturating_add(pegout_total)
-            .saturating_add(self.fee);
+        let input_total = checked_amount_total(self.inputs.iter().map(|c| c.amount))?;
+        let recipient_total = checked_amount_total(self.recipients.iter().map(|(_, a)| *a))?;
+        let pegout_total = checked_amount_total(self.pegouts.iter().map(|(_, a)| *a))?;
+        let needed = checked_amount_total([recipient_total, pegout_total, self.fee])?;
         if input_total < needed {
             return Err(Error::InsufficientFunds);
         }
@@ -186,7 +212,7 @@ pub fn build_pegin(
         Some((0, receive_index)), // sole output is owned at receive_index
         keys,
         fee,
-        Some(pegin_amount as i64),
+        Some(money_to_i64(pegin_amount, "peg-in amount")?),
         &[],
         secp,
     )?;
@@ -319,16 +345,18 @@ fn assemble_body(
     let stealth_blind = Zeroizing::new(random_secret(secp));
     let pegout_coins: Vec<PegOutCoin> = pegouts
         .iter()
-        .map(|(spk, amt)| PegOutCoin {
-            amount: *amt as i64,
-            script_pub_key: spk.clone(),
+        .map(|(spk, amt)| {
+            Ok(PegOutCoin {
+                amount: money_to_i64(*amt, "peg-out amount")?,
+                script_pub_key: spk.clone(),
+            })
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
 
     let kernel = create_kernel(
         *kernel_blind,
         Some(*stealth_blind),
-        Some(fee as i64),
+        Some(money_to_i64(fee, "kernel fee")?),
         pegin,
         &pegout_coins,
         secp,
@@ -635,6 +663,29 @@ mod tests {
     use super::*;
     use bitcoin::consensus::deserialize;
     use bitcoin::hex::FromHex;
+
+    #[test]
+    fn amount_totals_reject_overflow_and_supply_violation() {
+        use crate::limits::MAX_MONEY;
+
+        assert_eq!(checked_amount_total([1u64, 2, 3]).unwrap(), 6);
+        assert_eq!(checked_amount_total([MAX_MONEY]).unwrap(), MAX_MONEY);
+        // A wrapping u64 sum must error, not wrap.
+        assert!(checked_amount_total([u64::MAX, 1]).is_err());
+        // A total that cannot exist on the chain must error even without wrap.
+        assert!(checked_amount_total([MAX_MONEY, 1]).is_err());
+    }
+
+    #[test]
+    fn kernel_amount_casts_are_bounded_by_max_money() {
+        use crate::limits::MAX_MONEY;
+
+        assert_eq!(money_to_i64(0, "fee").unwrap(), 0);
+        assert_eq!(money_to_i64(MAX_MONEY, "fee").unwrap(), MAX_MONEY as i64);
+        assert!(money_to_i64(MAX_MONEY + 1, "fee").is_err());
+        // The value that would wrap `as i64` is far above MAX_MONEY.
+        assert!(money_to_i64(u64::MAX, "fee").is_err());
+    }
 
     #[test]
     fn fixture_kernel_id_matches_v9_program() {

@@ -10,6 +10,9 @@
 //! [`VerifyMode::Trusted`] just requires parent hashes to be present when UTXOs are
 //! returned.
 
+// Sync inputs are peer-controlled; a reachable panic is a remote DoS.
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
@@ -22,7 +25,7 @@ use crate::coin_db::{MwebCoin, MwebCoinDatabase};
 use crate::error::Error;
 use crate::keys::MasterKeys;
 use crate::p2p::{GetMwebUtxos, MwebHeaderMsg, MwebLeafset, MwebUtxos, OUTPUT_FORMAT_FULL};
-use crate::pmmr::{verify_leafset, verify_utxo_batch};
+use crate::pmmr::{verify_leafset_at, verify_utxo_batch};
 use crate::scan::{scan_utxo_entries_at, AddressBook};
 
 /// Default batch size for `getmwebutxos` (peer returns up to this many unspent UTXOs).
@@ -189,7 +192,7 @@ pub fn check_batch_advances(batch: &MwebUtxos, start_index: u64) -> Result<(), E
         return Ok(());
     };
     if first.leaf_index < start_index {
-        return Err(Error::Crypto(alloc::format!(
+        return Err(Error::protocol(alloc::format!(
             "peer protocol violation: mwebutxos leaf {} precedes requested start_index {start_index}",
             first.leaf_index
         )));
@@ -200,8 +203,8 @@ pub fn check_batch_advances(batch: &MwebUtxos, start_index: u64) -> Result<(), E
 /// Soft verification: require `parent_hashes` non-empty when `utxos` is non-empty.
 pub fn verify_parent_hashes_present(msg: &MwebUtxos) -> Result<(), Error> {
     if !msg.utxos.is_empty() && msg.parent_hashes.is_empty() {
-        return Err(Error::Crypto(
-            "mwebutxos missing parent_hashes (use VerifyMode::Trusted only with care)".into(),
+        return Err(Error::protocol(
+            "mwebutxos missing parent_hashes (use VerifyMode::Trusted only with care)",
         ));
     }
     Ok(())
@@ -235,12 +238,14 @@ pub fn sync_mweb_utxos<S: MwebUtxoSource>(
     let mweb_header = header_msg.as_ref().map(|h| h.mweb_header.clone());
 
     let leafset = source.get_leafset(block_hash)?;
+    // Checked here as well as in `verify_leafset_at` so `VerifyMode::Trusted`
+    // (no header) still rejects a leafset for the wrong block.
     if leafset.block_hash != block_hash {
-        return Err(Error::Crypto("leafset block_hash mismatch".into()));
+        return Err(Error::protocol("leafset block_hash mismatch"));
     }
 
     if let Some(ref hdr) = mweb_header {
-        verify_leafset(&leafset, &hdr.leafset_root, hdr.output_mmr_size)?;
+        verify_leafset_at(&leafset, block_hash, &hdr.leafset_root, hdr.output_mmr_size)?;
     }
 
     let indices = leafset.unspent_leaf_indices();
@@ -262,7 +267,7 @@ pub fn sync_mweb_utxos<S: MwebUtxoSource>(
         };
         let batch = source.get_utxos(req)?;
         if batch.output_format != OUTPUT_FORMAT_FULL {
-            return Err(Error::Crypto("expected FULL_UTXO format".into()));
+            return Err(Error::protocol("expected FULL_UTXO format"));
         }
         match mweb_header.as_ref() {
             Some(hdr) => verify_utxo_batch(&batch, &leafset, hdr)?,
@@ -278,7 +283,7 @@ pub fn sync_mweb_utxos<S: MwebUtxoSource>(
             entries.push((entry.leaf_index, entry.output.clone()));
         }
         if entries.len() > MAX_BUFFERED_ENTRIES {
-            return Err(Error::Crypto(alloc::format!(
+            return Err(Error::protocol(alloc::format!(
                 "mwebutxos: buffered more than {MAX_BUFFERED_ENTRIES} outputs in one sync"
             )));
         }
@@ -292,8 +297,8 @@ pub fn sync_mweb_utxos<S: MwebUtxoSource>(
         // only thing standing between a malicious peer and an unbounded spin, so
         // make the guarantee explicit rather than emergent.
         if i == before {
-            return Err(Error::Crypto(
-                "peer protocol violation: mwebutxos batch did not advance the leaf cursor".into(),
+            return Err(Error::protocol(
+                "peer protocol violation: mwebutxos batch did not advance the leaf cursor",
             ));
         }
     }
@@ -386,6 +391,8 @@ impl MwebUtxoSource for ScriptedMwebSource {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
     use crate::p2p::MwebUtxoEntry;
     use bitcoin::hashes::Hash;

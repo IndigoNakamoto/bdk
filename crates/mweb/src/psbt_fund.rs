@@ -27,7 +27,10 @@ use crate::psbt::{
     mweb_output_from_wire, scrub_sensitive_fields,
 };
 use crate::scan::output_id;
-use crate::tx_builder::{create_input, create_kernel, create_output, CHANGE_ADDRESS_INDEX};
+use crate::tx_builder::{
+    checked_amount_total, create_input, create_kernel, create_output, money_to_i64,
+    CHANGE_ADDRESS_INDEX,
+};
 
 /// Staged output produced during fund (blinds kept off-PSBT until sign).
 #[derive(Debug, Clone)]
@@ -80,12 +83,10 @@ pub fn fund_mweb_spend(
     if inputs.is_empty() {
         return Err(Error::MissingCoinSecrets);
     }
-    let input_total: u64 = inputs.iter().map(|c| c.amount).sum();
-    let recipient_total: u64 = recipients.iter().map(|(_, a)| *a).sum();
-    let pegout_total: u64 = pegouts.iter().map(|(_, a)| *a).sum();
-    let needed = recipient_total
-        .saturating_add(pegout_total)
-        .saturating_add(fee);
+    let input_total = checked_amount_total(inputs.iter().map(|c| c.amount))?;
+    let recipient_total = checked_amount_total(recipients.iter().map(|(_, a)| *a))?;
+    let pegout_total = checked_amount_total(pegouts.iter().map(|(_, a)| *a))?;
+    let needed = checked_amount_total([recipient_total, pegout_total, fee])?;
     if input_total < needed {
         return Err(Error::InsufficientFunds);
     }
@@ -146,12 +147,12 @@ pub fn fund_mweb_spend(
     let pegouts_ser: Vec<Vec<u8>> = pegouts
         .iter()
         .map(|(spk, amt)| {
-            bitcoin::psbt::mweb::pegout_psbt_value(&PegOutCoin {
-                amount: *amt as i64,
+            Ok(bitcoin::psbt::mweb::pegout_psbt_value(&PegOutCoin {
+                amount: money_to_i64(*amt, "peg-out amount")?,
                 script_pub_key: spk.clone(),
-            })
+            }))
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
 
     let kernel = MwebKernel {
         fee: (fee > 0).then_some(fee),
@@ -247,16 +248,18 @@ pub fn sign_funded_mweb(
     let pegout_coins: Vec<PegOutCoin> = funded
         .pegouts
         .iter()
-        .map(|(spk, amt)| PegOutCoin {
-            amount: *amt as i64,
-            script_pub_key: spk.clone(),
+        .map(|(spk, amt)| {
+            Ok(PegOutCoin {
+                amount: money_to_i64(*amt, "peg-out amount")?,
+                script_pub_key: spk.clone(),
+            })
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
 
     let kernel = create_kernel(
         kernel_blind,
         Some(stealth_blind),
-        Some(funded.fee as i64),
+        Some(money_to_i64(funded.fee, "kernel fee")?),
         None,
         &pegout_coins,
         secp,
@@ -487,8 +490,8 @@ pub fn sign_funded_mweb_pegin(
     let kernel = create_kernel(
         kernel_blind,
         Some(stealth_blind),
-        Some(funded.fee as i64),
-        Some(funded.pegin_amount as i64),
+        Some(money_to_i64(funded.fee, "kernel fee")?),
+        Some(money_to_i64(funded.pegin_amount, "peg-in amount")?),
         &[],
         secp,
     )?;

@@ -18,7 +18,7 @@
 use bdk_mweb::hash::blake3_hash;
 use bdk_mweb::limits::MAX_OUTPUT_MMR_SIZE;
 use bdk_mweb::p2p::{MwebLeafset, MwebUtxoEntry, MwebUtxos, OUTPUT_FORMAT_FULL};
-use bdk_mweb::pmmr::{verify_leafset, verify_utxo_batch, MemMmr};
+use bdk_mweb::pmmr::{verify_leafset, verify_leafset_at, verify_utxo_batch, MemMmr};
 use bdk_mweb::scan::output_id;
 use bitcoin::blockdata::block::MwebBlockHeader;
 use bitcoin::blockdata::mimblewimble::{Output, OutputMessage};
@@ -185,6 +185,48 @@ fn leafset_rejects_output_mmr_size_above_cap() {
             "size {size} rejected for the wrong reason: {err}"
         );
     }
+}
+
+/// F-V03 (zero case). `output_mmr_size = 0` commits to zero bytes: only the hash of
+/// the empty prefix passes, and the call returns immediately rather than hanging.
+/// (The `u64::MAX` end of F-V03 is covered by the cap test above.)
+#[test]
+fn leafset_zero_mmr_size_commits_to_empty_prefix_only() {
+    let (_, leafset, _) = honest_chain(16);
+    let empty_root = blake3_hash(&[]);
+    verify_leafset(&leafset, &empty_root, 0).expect("size 0 hashes an empty prefix");
+    assert!(
+        verify_leafset(&leafset, &[0u8; 32], 0).is_err(),
+        "size 0 must still compare against the committed root"
+    );
+}
+
+/// F-V04. A root-valid leafset for the *wrong block* must be rejected by the
+/// block-aware variant: `verify_leafset` alone cannot see which block the caller
+/// asked for, which is exactly the gap `verify_leafset_at` closes.
+#[test]
+fn leafset_for_wrong_block_is_rejected() {
+    let (header, leafset, _) = honest_chain(16);
+    verify_leafset_at(
+        &leafset,
+        block_hash(),
+        &header.leafset_root,
+        header.output_mmr_size,
+    )
+    .expect("matching block must verify");
+
+    let other = BlockHash::from_byte_array([0x88; 32]);
+    let err = verify_leafset_at(
+        &leafset,
+        other,
+        &header.leafset_root,
+        header.output_mmr_size,
+    )
+    .unwrap_err();
+    assert!(
+        format!("{err}").contains("block_hash mismatch"),
+        "rejected for the wrong reason: {err}"
+    );
 }
 
 // ------------------------------------------------------------ verify_utxo_batch
@@ -419,4 +461,33 @@ fn extra_data_is_outside_output_id_only_while_the_decoder_agrees() {
     assert_ne!(output_id(&with_bit_set), output_id(&output(1)));
     let round_tripped: Output = deserialize(&serialize(&with_bit_set)).unwrap();
     assert_eq!(round_tripped.message.extra_data, vec![0xCD; 8]);
+}
+
+/// F-06c: measure `verify_utxo_batch` at mainnet scale. Not an assertion-style
+/// test — run manually and record the numbers in `docs/SECURITY_PLAN.md`:
+///
+/// ```sh
+/// cargo test -p bdk_mweb --release --features lip0006 \
+///     measure_verify_utxo_batch_cost -- --ignored --nocapture
+/// ```
+///
+/// The parent-fill pass in `verify_segment_root` is linear in `num_nodes`
+/// (derived from `output_mmr_size`), so cost per call scales with chain size,
+/// not batch size. The two sizes below demonstrate that linearity; extrapolate
+/// for future chain growth.
+#[test]
+#[ignore = "timing measurement, run in release with --nocapture"]
+#[allow(clippy::print_stdout)] // measurement output is the point of this test
+fn measure_verify_utxo_batch_cost() {
+    // ~350k leaves is observed mainnet scale (limits.rs OBSERVED_MAINNET_LEAVES).
+    for n in [35_000u64, 350_000] {
+        let build_start = std::time::Instant::now();
+        let (header, leafset, batch) = honest_chain(n);
+        let built = build_start.elapsed();
+
+        let start = std::time::Instant::now();
+        verify_utxo_batch(&batch, &leafset, &header).expect("honest chain verifies");
+        let verified = start.elapsed();
+        println!("n={n}: build {built:?}, verify_utxo_batch {verified:?}");
+    }
 }

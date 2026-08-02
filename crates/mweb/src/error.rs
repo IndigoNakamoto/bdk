@@ -3,6 +3,36 @@
 use alloc::string::String;
 use core::fmt;
 
+/// Why a peer-attributable error justifies banning the peer and rotating.
+///
+/// This is the typed discriminant behind
+/// [`crate::mweb_sync::is_banworthy_peer_error`] (F-18): classification is
+/// carried in the error itself, so no message wording is load-bearing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BanReason {
+    /// A payload failed verification against a committed root or anchor
+    /// (leafset root, PMMR output root, segment proof, HogEx anchoring).
+    BadProof,
+    /// The peer sent something the protocol does not allow: bad framing or
+    /// magic, out-of-bounds sizes, unsorted batches, a wrong-block response,
+    /// or a batch that cannot advance the sync cursor.
+    ProtocolViolation,
+    /// The transport failed mid-conversation: timeout, closed socket, broken
+    /// pipe, or another I/O failure attributable to the connection.
+    Transport,
+}
+
+impl fmt::Display for BanReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BadProof => write!(f, "bad proof"),
+            Self::ProtocolViolation => write!(f, "protocol violation"),
+            Self::Transport => write!(f, "transport failure"),
+        }
+    }
+}
+
 /// Errors produced by MWEB key derivation, addressing, or crypto helpers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -22,6 +52,38 @@ pub enum Error {
     NotMwebAddress,
     /// Consensus / FFI crypto failure.
     Crypto(String),
+    /// Peer-attributable failure; the [`BanReason`] drives ban/rotate decisions.
+    ///
+    /// Custom [`crate::lip0006::MwebUtxoSource`] implementations should use the
+    /// [`Error::bad_proof`] / [`Error::protocol`] / [`Error::transport`]
+    /// constructors for failures the peer caused, so peer rotation keeps
+    /// working. The message is diagnostics only and carries no semantics.
+    Peer(BanReason, String),
+}
+
+impl Error {
+    /// A payload failed verification against a committed root or anchor.
+    pub fn bad_proof(msg: impl Into<String>) -> Self {
+        Self::Peer(BanReason::BadProof, msg.into())
+    }
+
+    /// The peer violated the wire protocol (framing, bounds, ordering, liveness).
+    pub fn protocol(msg: impl Into<String>) -> Self {
+        Self::Peer(BanReason::ProtocolViolation, msg.into())
+    }
+
+    /// The transport to the peer failed (timeout, disconnect, I/O error).
+    pub fn transport(msg: impl Into<String>) -> Self {
+        Self::Peer(BanReason::Transport, msg.into())
+    }
+
+    /// The typed ban classification, when this error is peer-attributable.
+    pub fn ban_reason(&self) -> Option<BanReason> {
+        match self {
+            Self::Peer(reason, _) => Some(*reason),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Error {
@@ -35,6 +97,7 @@ impl fmt::Display for Error {
             Self::MissingCoinSecrets => write!(f, "MWEB coin missing spend_key or blind"),
             Self::NotMwebAddress => write!(f, "address is not an MWEB stealth address"),
             Self::Crypto(e) => write!(f, "MWEB crypto error: {e}"),
+            Self::Peer(reason, e) => write!(f, "MWEB peer error ({reason}): {e}"),
         }
     }
 }

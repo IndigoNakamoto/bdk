@@ -152,6 +152,12 @@ pub fn seal(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
 ///
 /// v2 envelopes open regardless of their context tag — only
 /// [`open_with_context`] enforces it.
+///
+/// The returned plaintext typically holds spend-equivalent secrets and is the
+/// **caller's** to wipe (`zeroize`) once decoded; no intermediate copy is made
+/// here, and error paths never surface partial plaintext. The changeset
+/// wrappers ([`open_changeset`] / [`open_changeset_with_context`]) do this
+/// wiping internally.
 pub fn open(key: &[u8; 32], sealed: &[u8]) -> Result<Vec<u8>, Error> {
     // Route on the magic rather than on the version, so a blob from a future
     // envelope revision reports that plainly instead of failing as a legacy

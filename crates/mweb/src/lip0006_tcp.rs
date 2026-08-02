@@ -4,6 +4,9 @@
 //! `getdata`(MSG_MWEB_HEADER / MSG_MWEB_LEAFSET) and `getmwebutxos` as raw
 //! unknown payloads. Intended for regtest; prefer [`crate::lip0006::VerifyMode::HeaderAndPmmr`].
 
+// Every byte received here is peer-controlled; a reachable panic is a remote DoS.
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use alloc::vec::Vec;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -118,15 +121,13 @@ impl TcpMwebPeer {
     /// Designed for pure MWEB transactions (MWEB→MWEB sends and peg-outs),
     /// which Electrum servers cannot relay. Works as follows:
     ///
-    /// 1. Send the unsolicited `tx` message (Core validates those regardless
-    ///    of a prior `inv`). The litecoin consensus encoding carries the MWEB
-    ///    body (segwit flag bit `0x08`).
-    /// 2. `ping`/`pong` flush: litecoind processes a peer's messages in
-    ///    order, so the pong proves the tx was fully processed.
-    /// 3. Poll `getdata` for the tx. Core withholds *fresh* mempool txs from
-    ///    `getdata` replies for privacy (`UNCONDITIONAL_RELAY_DELAY`), but
-    ///    serves them from its relay map as soon as it announces them to
-    ///    other peers (typically 5–15s), and it always answers a tx `getdata`
+    /// 1. Send the unsolicited `tx` message (Core validates those regardless of a prior `inv`). The
+    ///    litecoin consensus encoding carries the MWEB body (segwit flag bit `0x08`).
+    /// 2. `ping`/`pong` flush: litecoind processes a peer's messages in order, so the pong proves
+    ///    the tx was fully processed.
+    /// 3. Poll `getdata` for the tx. Core withholds *fresh* mempool txs from `getdata` replies for
+    ///    privacy (`UNCONDITIONAL_RELAY_DELAY`), but serves them from its relay map as soon as it
+    ///    announces them to other peers (typically 5–15s), and it always answers a tx `getdata`
     ///    promptly with either `tx` or `notfound`.
     ///
     /// Persistent `notfound` until the deadline yields [`BroadcastAck::Sent`]
@@ -279,9 +280,7 @@ impl TcpMwebPeer {
             }
         }
         if !saw_version || !saw_verack {
-            return Err(Error::Crypto(
-                "p2p handshake: incomplete version/verack".into(),
-            ));
+            return Err(Error::protocol("p2p handshake: incomplete version/verack"));
         }
         Ok(())
     }
@@ -291,7 +290,7 @@ impl TcpMwebPeer {
         let bytes = serialize(&raw);
         self.stream
             .write_all(&bytes)
-            .map_err(|e| Error::Crypto(alloc::format!("p2p write: {e}")))?;
+            .map_err(|e| Error::transport(alloc::format!("p2p write: {e}")))?;
         Ok(())
     }
 
@@ -317,7 +316,7 @@ impl TcpMwebPeer {
         msg.extend_from_slice(payload);
         self.stream
             .write_all(&msg)
-            .map_err(|e| Error::Crypto(alloc::format!("p2p write: {e}")))?;
+            .map_err(|e| Error::transport(alloc::format!("p2p write: {e}")))?;
         Ok(())
     }
 
@@ -325,7 +324,7 @@ impl TcpMwebPeer {
         let mut header = [0u8; 24];
         self.stream
             .read_exact(&mut header)
-            .map_err(|e| Error::Crypto(alloc::format!("p2p read header: {e}")))?;
+            .map_err(|e| Error::transport(alloc::format!("p2p read header: {e}")))?;
         // Validate magic and bound the length *before* allocating: the declared
         // length is peer-controlled, and `deserialize` only checks magic and
         // checksum after the buffer already exists.
@@ -334,7 +333,7 @@ impl TcpMwebPeer {
         if len > 0 {
             self.stream
                 .read_exact(&mut payload)
-                .map_err(|e| Error::Crypto(alloc::format!("p2p read payload: {e}")))?;
+                .map_err(|e| Error::transport(alloc::format!("p2p read payload: {e}")))?;
         }
         parse_frame(self.magic, &header, &payload)
     }
@@ -346,7 +345,7 @@ impl TcpMwebPeer {
         let deadline = std::time::Instant::now() + RECV_UNTIL_DEADLINE;
         for _ in 0..64 {
             if std::time::Instant::now() >= deadline {
-                return Err(Error::Crypto(alloc::format!(
+                return Err(Error::transport(alloc::format!(
                     "p2p: timed out waiting for {want} (deadline exceeded)"
                 )));
             }
@@ -362,7 +361,7 @@ impl TcpMwebPeer {
                     self.send(NetworkMessage::Pong(*nonce))?;
                 }
                 NetworkMessage::NotFound(inv) => {
-                    return Err(Error::Crypto(alloc::format!(
+                    return Err(Error::protocol(alloc::format!(
                         "p2p: notfound while waiting for {want}: {inv:?}"
                     )));
                 }
@@ -372,7 +371,7 @@ impl TcpMwebPeer {
                 }
             }
         }
-        Err(Error::Crypto(alloc::format!(
+        Err(Error::transport(alloc::format!(
             "p2p: timed out waiting for {want}"
         )))
     }
@@ -386,13 +385,11 @@ impl TcpMwebPeer {
 /// a transient IO fault worth reconnecting for.
 pub fn frame_payload_len(magic: Magic, header: &[u8; 24]) -> Result<usize, Error> {
     if header[..4] != magic.to_bytes() {
-        return Err(Error::Crypto(
-            "p2p protocol violation: bad network magic".into(),
-        ));
+        return Err(Error::protocol("p2p protocol violation: bad network magic"));
     }
     let len = u32::from_le_bytes([header[16], header[17], header[18], header[19]]) as usize;
     if len > MAX_P2P_PAYLOAD {
-        return Err(Error::Crypto(alloc::format!(
+        return Err(Error::protocol(alloc::format!(
             "p2p protocol violation: payload length {len} exceeds cap {MAX_P2P_PAYLOAD}"
         )));
     }
@@ -407,7 +404,7 @@ pub fn parse_frame(
 ) -> Result<RawNetworkMessage, Error> {
     let len = frame_payload_len(magic, header)?;
     if payload.len() != len {
-        return Err(Error::Crypto(alloc::format!(
+        return Err(Error::protocol(alloc::format!(
             "p2p protocol violation: payload is {} bytes, header declared {len}",
             payload.len()
         )));
@@ -415,7 +412,7 @@ pub fn parse_frame(
     let mut full = Vec::with_capacity(24 + payload.len());
     full.extend_from_slice(header);
     full.extend_from_slice(payload);
-    deserialize(&full).map_err(|e| Error::Crypto(alloc::format!("p2p decode: {e}")))
+    deserialize(&full).map_err(|e| Error::protocol(alloc::format!("p2p decode: {e}")))
 }
 
 /// `getdata` inventory identifying `tx` for mempool polling.
@@ -440,6 +437,8 @@ fn tx_inventory(tx: &bitcoin::Transaction) -> Result<Inventory, Error> {
 
 #[cfg(test)]
 mod frame_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
 
     fn header_with(magic: Magic, len: u32) -> [u8; 24] {
@@ -497,6 +496,8 @@ mod frame_tests {
 
 #[cfg(test)]
 mod broadcast_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
 
     /// Round-trip a `MSG_MWEB_TX` getdata against a live node: an unknown hash
@@ -602,7 +603,7 @@ impl MwebUtxoSource for TcpMwebPeer {
             let payload = this.recv_until_cmd("mwebheader")?;
             let mut cursor = std::io::Cursor::new(payload);
             MwebHeaderMsg::consensus_decode(&mut cursor)
-                .map_err(|e| Error::Crypto(alloc::format!("mwebheader decode: {e}")))
+                .map_err(|e| Error::protocol(alloc::format!("mwebheader decode: {e}")))
         })
     }
 
@@ -613,7 +614,7 @@ impl MwebUtxoSource for TcpMwebPeer {
             let payload = this.recv_until_cmd("mwebleafset")?;
             let mut cursor = std::io::Cursor::new(payload);
             MwebLeafset::consensus_decode(&mut cursor)
-                .map_err(|e| Error::Crypto(alloc::format!("mwebleafset decode: {e}")))
+                .map_err(|e| Error::protocol(alloc::format!("mwebleafset decode: {e}")))
         })
     }
 
@@ -624,7 +625,7 @@ impl MwebUtxoSource for TcpMwebPeer {
             let resp = this.recv_until_cmd("mwebutxos")?;
             let mut cursor = std::io::Cursor::new(resp);
             MwebUtxos::consensus_decode(&mut cursor)
-                .map_err(|e| Error::Crypto(alloc::format!("mwebutxos decode: {e}")))
+                .map_err(|e| Error::protocol(alloc::format!("mwebutxos decode: {e}")))
         })
     }
 
@@ -645,7 +646,7 @@ impl MwebUtxoSource for TcpMwebPeer {
                 let resp = this.recv_until_cmd("mwebutxos")?;
                 let mut cursor = std::io::Cursor::new(resp);
                 let batch = MwebUtxos::consensus_decode(&mut cursor)
-                    .map_err(|e| Error::Crypto(alloc::format!("mwebutxos decode: {e}")))?;
+                    .map_err(|e| Error::protocol(alloc::format!("mwebutxos decode: {e}")))?;
                 on_batch(batch)?;
             }
             Ok(())

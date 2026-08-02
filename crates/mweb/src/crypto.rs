@@ -743,6 +743,35 @@ mod tests {
             tampered[0] ^= 1;
             assert!(!bulletproof_verify(&commit, &tampered, &[]).unwrap());
         }
+
+        /// F-13c: measure per-proof `bulletproof_verify` cost. Not an
+        /// assertion-style test — run manually and record the numbers in
+        /// `docs/SECURITY_PLAN.md`:
+        ///
+        /// ```sh
+        /// cargo test -p bdk_mweb --release --features zkp \
+        ///     measure_bulletproof_verify_cost -- --ignored --nocapture
+        /// ```
+        ///
+        /// This is the per-owned-output cost of `MwebSyncer::verify_rangeproofs`.
+        #[cfg(feature = "std")]
+        #[test]
+        #[ignore = "timing measurement, run in release with --nocapture"]
+        #[allow(clippy::print_stdout)] // measurement output is the point of this test
+        fn measure_bulletproof_verify_cost() {
+            let secp = Secp256k1::new();
+            let blind = blind_switch(&BLIND, VALUE, &secp).unwrap();
+            let commit = pedersen_commit(VALUE, &blind, &secp).unwrap();
+            let proof = bulletproof_prove(VALUE, &blind, &[]).unwrap();
+
+            const ITERS: u32 = 50;
+            let start = std::time::Instant::now();
+            for _ in 0..ITERS {
+                assert!(bulletproof_verify(&commit, &proof, &[]).unwrap());
+            }
+            let per_proof = start.elapsed() / ITERS;
+            println!("bulletproof_verify: {per_proof:?} per proof ({ITERS} iterations)");
+        }
     }
 
     #[test]

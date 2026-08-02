@@ -19,6 +19,11 @@ cd crates/mweb/fuzz
 RUN_TIME=3600 ./fuzz.sh        # an hour each
 ```
 
+Or from the repo root: `just fuzz` / `just fuzz rewind_output`.
+
+CI runs the same script on a schedule (`.github/workflows/fuzz.yml`), plus a
+short smoke run whenever the harness itself changes.
+
 To run a single target indefinitely:
 
 ```bash
@@ -49,6 +54,7 @@ silent wrap would otherwise look like a clean run.
 | `pmmr_math` | `leaf_position` / `num_nodes_for_leaves` overflow, `MemMmr` construction |
 | `verify_leafset` | Accepts the true root, rejects any mutation inside the committed prefix |
 | `verify_utxo_batch` | Accepts a self-consistent batch, rejects substituted / reordered / truncated ones |
+| `rewind_output` | `rewind_output` on hostile outputs vs a fixed keyset; must never panic and never yield a coin |
 | `sync_driver` | Liveness: a peer replaying leaves below `start_index` must not loop forever |
 | `open_sealed` | `encrypt::open` on hostile bytes; v2 envelope context binding and rollback counter |
 
@@ -64,6 +70,19 @@ tolerates, which is the property that actually protects the wallet.
 honggfuzz reports it only as a timeout, after burning the budget — so the
 scripted peer counts its own calls and panics past a bound no honest sync
 reaches. An infinite loop becomes an immediate, minimizable crash.
+
+## Seed corpus
+
+`hfuzz_input/<target>/input/` holds checked-in seeds: real ltcd-generated MWEB
+outputs (from `tests/fixtures/`, produced by `scripts/ltcd_mweb_fixtures` on
+regtest) and honest encodings from the wallet's own encoders. Structured
+decoders starve without them — random bytes rarely survive the first length
+prefix. `fuzz.sh` passes the directory to honggfuzz automatically when it
+exists.
+
+Regenerate deterministically with `just fuzz-corpus` (or
+`cargo run --bin gen_corpus` from this directory); CI fails if the checked-in
+corpus does not match what the generator produces.
 
 ## Reproducing a crash
 

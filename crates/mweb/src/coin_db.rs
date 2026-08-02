@@ -223,8 +223,14 @@ impl MwebCoinDatabase {
     }
 
     /// Sum of all unspent amounts (confirmed and pending).
+    ///
+    /// Saturates rather than wrapping: coin amounts can originate from a peer
+    /// (via scan), so the sum must not be able to panic or wrap on fabricated
+    /// values.
     pub fn balance(&self) -> u64 {
-        self.coins.values().map(|c| c.amount).sum()
+        self.coins
+            .values()
+            .fold(0u64, |acc, c| acc.saturating_add(c.amount))
     }
 
     /// Bucketed unspent balance at `tip_height` (1+ confirmation ⇒ confirmed).
@@ -408,6 +414,17 @@ mod tests {
             is_pegin,
             leaf_index: None,
         }
+    }
+
+    #[test]
+    fn balance_saturates_on_fabricated_amounts() {
+        let mut db = MwebCoinDatabase::new();
+        db.insert(coin(1, u64::MAX, Some(10), false));
+        db.insert(coin(2, u64::MAX, Some(10), false));
+        // Fabricated coins (a lying peer can choose any value) must not wrap
+        // or panic the balance sum.
+        assert_eq!(db.balance(), u64::MAX);
+        assert_eq!(db.balance_at(20).confirmed, u64::MAX);
     }
 
     #[test]

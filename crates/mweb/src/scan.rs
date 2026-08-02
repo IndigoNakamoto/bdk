@@ -2,6 +2,16 @@
 //!
 //! Wire input may be decoded `mw_tx` bodies (Core RPC) or FULL_UTXO batches from
 //! [`crate::lip0006`] (feature `lip0006`).
+//!
+//! # Trust model
+//!
+//! [`rewind_output`] does not verify an output's rangeproof or signature. It
+//! does independently recompute the commitment from the unmasked value, so a
+//! fabricated output cannot *misreport* its value — but a peer authoring an
+//! output whole can still choose any (supply-bounded) value it likes. Consensus
+//! validity of the proofs is inherited from PMMR inclusion under an anchored
+//! root (see the `pmmr` module docs); when syncing with a weaker verify mode,
+//! enable `MwebSyncer::verify_rangeproofs`.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -164,6 +174,14 @@ pub fn rewind_output(
     let expected_commit = switch_commit(&pre_blind, value, secp)?;
     if expected_commit != output.commitment {
         return Ok(None);
+    }
+
+    // Past the commitment check the output genuinely decodes to us with this
+    // value. Consensus rejects amounts above MAX_MONEY, so a larger value can
+    // only come from a fabricated output (e.g. an unanchored peer inventing
+    // phantom balance) — fail closed rather than storing it.
+    if value > crate::limits::MAX_MONEY {
+        return Err(Error::bad_proof("rewound output amount exceeds MAX_MONEY"));
     }
 
     let s = send_key_hash(&a_i, &b_i, value, &nonce);

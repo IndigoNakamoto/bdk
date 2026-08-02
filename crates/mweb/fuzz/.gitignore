@@ -1,0 +1,5 @@
+# honggfuzz build/run artifacts. The seed corpus under hfuzz_input/ is
+# checked in (regenerate with `cargo run --bin gen_corpus`).
+hfuzz_target/
+hfuzz_workspace/
+target/

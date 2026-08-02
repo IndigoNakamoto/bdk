@@ -10,8 +10,7 @@
 //! they can be re-derived when the protocol changes:
 //!
 //! - A leafset arrives in a single P2P message, so it cannot exceed the message cap.
-//! - The output MMR cannot hold more leaves than the largest deliverable leafset
-//!   has bits.
+//! - The output MMR cannot hold more leaves than the largest deliverable leafset has bits.
 //! - A batch cannot hold more UTXOs than `getmwebutxos.num_requested` can express.
 
 /// Largest P2P message payload accepted from a peer, in bytes.
@@ -53,6 +52,14 @@ pub const MAX_UTXOS_PER_BATCH: usize = u16::MAX as usize;
 /// position space.
 pub const MAX_PARENT_HASHES: usize = 2 * MAX_UTXOS_PER_BATCH + 64;
 
+/// Largest litoshi amount that can exist: Litecoin's `MAX_MONEY` (84M LTC).
+///
+/// Consensus rejects any amount outside `[0, MAX_MONEY]` (Core `MoneyRange`), so
+/// a rewound or peer-supplied amount above this is fabricated by construction.
+/// Amounts bounded by this constant also cannot wrap when cast to the `i64`
+/// kernel-amount representation.
+pub const MAX_MONEY: u64 = 84_000_000 * 100_000_000;
+
 /// Upper bound on a single `reserve` when decoding a peer-supplied sequence.
 ///
 /// Length prefixes are capped before use, but a capped length is still far larger
@@ -80,4 +87,6 @@ const _: () = {
     // At least 50x headroom over observed mainnet usage.
     assert!(MAX_OUTPUT_MMR_SIZE > OBSERVED_MAINNET_LEAVES * 50);
     assert!(MAX_LEAFSET_BYTES as u64 > (OBSERVED_MAINNET_LEAVES / 8) * 50);
+    // Kernel amounts are i64 on the wire; the cast in the tx builders relies on this.
+    assert!(MAX_MONEY <= i64::MAX as u64);
 };

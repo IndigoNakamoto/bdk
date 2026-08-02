@@ -60,7 +60,7 @@ pub use encrypt::{
 pub use encrypt::{
     open_changeset, open_changeset_with_context, seal_changeset, seal_changeset_with_context,
 };
-pub use error::Error;
+pub use error::{BanReason, Error};
 pub use keys::{address_index_tweak, master_keys_from_seed, MasterKeyScheme, MasterKeys};
 #[allow(deprecated)]
 pub use psbt::MwebPsbt;

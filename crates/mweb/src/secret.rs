@@ -74,6 +74,14 @@ impl Eq for Secret32 {}
 /// Timing-safe comparison matters wherever an attacker can observe how long a
 /// mismatch took and use that to recover a secret byte by byte. The volatile
 /// reads stop LLVM from turning the fold back into an early-exit `memcmp`.
+///
+/// Hand-rolled instead of depending on `subtle` (F-19a), deliberately: this
+/// crate needs exactly one comparison over exactly one width, and the volatile
+/// read + accumulated-XOR construction is the same barrier technique `subtle`
+/// uses for its `ConstantTimeEq` on byte slices. A whole extra dependency in a
+/// wallet's supply chain buys nothing here. If richer constant-time types are
+/// ever needed (CtOption, conditional select), switch to `subtle` rather than
+/// growing this module.
 pub fn ct_eq32(a: &[u8; 32], b: &[u8; 32]) -> bool {
     let mut diff = 0u8;
     for i in 0..32 {

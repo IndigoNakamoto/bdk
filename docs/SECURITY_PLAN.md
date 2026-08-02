@@ -129,12 +129,12 @@ raises the bar to peer collusion or eclipse; it does not close the gap.
 
 **Fix (agreed approach: new opt-in mode first).**
 
-- [ ] **F-01a** Add `pub fn header_hash(h: &MwebBlockHeader) -> [u8; 32]` to
+- [x] **F-01a** Add `pub fn header_hash(h: &MwebBlockHeader) -> [u8; 32]` to
       `p2p.rs`, computed as `blake3_hash(&serialize(h))` (Core
       `mw::Header::GetHash`). `MwebBlockHeader` has no hash method in
       rust-litecoin, so this lives here. Add a known-answer test against a
       mainnet header captured from litecoind.
-- [ ] **F-01b** Add `MwebHeaderMsg::verify_anchored(&self, block_hash: BlockHash)
+- [x] **F-01b** Add `MwebHeaderMsg::verify_anchored(&self, block_hash: BlockHash)
       -> Result<(), Error>` implementing, in order:
       1. `self.merkle.header.block_hash() == block_hash`;
       2. `self.merkle.extract_matches(&mut txids, &mut indexes)` succeeds and
@@ -149,21 +149,21 @@ raises the bar to peer collusion or eclipse; it does not close the gap.
       assertion at `tx_builder.rs:657`), and HogEx is expected to use v8
       (`0x58`), but **verify this against Core's HogEx validation rather than
       assuming it**.
-- [ ] **F-01c** Add `VerifyMode::Anchored` as a new variant. Keep
+- [x] **F-01c** Add `VerifyMode::Anchored` as a new variant. Keep
       `#[default] HeaderAndPmmr` unchanged so the wallet's behavior does not
       move. `Anchored` runs `verify_anchored` and then everything
       `HeaderAndPmmr` already does.
-- [ ] **F-01d** Note in the `VerifyMode::HeaderAndPmmr` doc comment that it is
+- [x] **F-01d** Note in the `VerifyMode::HeaderAndPmmr` doc comment that it is
       *self-consistency* verification, not chain-anchored verification, and
       that callers must pair it with an independent cross-check.
-- [ ] **F-01e** Regtest test: `Anchored` accepts a real litecoind `mwebheader`,
+- [x] **F-01e** Regtest test: `Anchored` accepts a real litecoind `mwebheader`,
       and rejects each of four mutations (wrong block hash, tampered
       `output_root`, tampered `leafset_root`, HogEx swapped for another tx).
-- [ ] **F-01f** Mainnet probe (ignored test, like
+- [x] **F-01f** Mainnet probe (ignored test, like
       `probe_mweb_tx_getdata_notfound` at `lip0006_tcp.rs:396`) confirming a
       live litecoind's `mwebheader` carries a merkle proof sufficient for
       `verify_anchored`. **This is the gate for flipping the default.**
-- [ ] **F-01g** Once F-01f passes, flip `#[default]` to `Anchored` in a separate
+- [x] **F-01g** Once F-01f passes, flip `#[default]` to `Anchored` in a separate
       commit and re-pin the wallet. `ScriptedMwebSource` and
       `tests/lip0006_sync.rs:26-40` build a placeholder `MerkleBlock` with a
       zero merkle root, so they must either move to `Trusted` or gain real
@@ -190,23 +190,23 @@ Allocation failure calls `handle_alloc_error`, which **aborts** — it is not a
 catchable panic. `MwebUtxos::consensus_decode` has the same shape twice, with
 `Vec::with_capacity(n)` at `p2p.rs:118` and `p2p.rs:130`.
 
-- [ ] **F-02a** Add a `limits` module (new file `src/limits.rs`) with named
+- [x] **F-02a** Add a `limits` module (new file `src/limits.rs`) with named
       constants and a short rationale comment for each:
       `MAX_P2P_PAYLOAD` (Core's `MAX_PROTOCOL_MESSAGE_LENGTH`; confirm the
       litecoind value), `MAX_LEAFSET_BYTES`, `MAX_UTXOS_PER_BATCH` (65535 —
       `num_requested` is `u16`, so a peer can never legitimately exceed it),
       `MAX_PARENT_HASHES`, `MAX_OUTPUT_MMR_SIZE`.
-- [ ] **F-02b** In `MwebLeafset::consensus_decode`, reject `size >
+- [x] **F-02b** In `MwebLeafset::consensus_decode`, reject `size >
       MAX_LEAFSET_BYTES` before allocating.
-- [ ] **F-03a** In `MwebUtxos::consensus_decode`, reject `n > MAX_UTXOS_PER_BATCH`
+- [x] **F-03a** In `MwebUtxos::consensus_decode`, reject `n > MAX_UTXOS_PER_BATCH`
       and `nh > MAX_PARENT_HASHES` before allocating. Replace both
       `Vec::with_capacity(n)` calls with `Vec::new()` plus
       `reserve(n.min(CAP))`, so a length prefix that passes the cap check still
       cannot preallocate more than the peer actually delivers.
-- [ ] **F-02c** Assert `MAX_LEAFSET_BYTES` comfortably exceeds the real mainnet
+- [x] **F-02c** Assert `MAX_LEAFSET_BYTES` comfortably exceeds the real mainnet
       leafset (roughly `output_mmr_size / 8`) in a test, so the cap cannot
       silently break live sync as the chain grows.
-- [ ] **F-03b** Move the `output_format != OUTPUT_FORMAT_FULL` check
+- [x] **F-03b** Move the `output_format != OUTPUT_FORMAT_FULL` check
       (`p2p.rs:121`, currently *inside* the entry loop) to before the loop, so a
       zero-entry non-FULL message is rejected too.
 
@@ -224,14 +224,14 @@ Up to 4 GiB allocated per message, with no magic check and no checksum check
 first (`deserialize` validates both, but only after the buffer exists). A peer
 that sends 24 bytes of garbage can exhaust wallet memory.
 
-- [ ] **F-04a** Validate `header[0..4]` against `self.magic` before allocating,
+- [x] **F-04a** Validate `header[0..4]` against `self.magic` before allocating,
       and reject `len > MAX_P2P_PAYLOAD`. Both failures should produce errors
       whose text is matched by `is_banworthy_peer_error` (see F-18).
-- [ ] **F-04b** Refactor the framing into a pure
+- [x] **F-04b** Refactor the framing into a pure
       `fn parse_frame(magic: Magic, header: &[u8; 24], payload: &[u8]) ->
       Result<RawNetworkMessage, Error>` so it is unit-testable and fuzzable
       without a socket.
-- [ ] **F-04c** Bound total bytes read per logical request. `recv_until_cmd`
+- [x] **F-04c** Bound total bytes read per logical request. `recv_until_cmd`
       caps at 64 messages (`lip0006_tcp.rs:336`) but each may be
       `MAX_P2P_PAYLOAD`, and each `recv` can block for the full 180 s read
       timeout — a peer can legitimately stall a single call for hours. Add a
@@ -254,17 +254,17 @@ The empty-batch case is handled; this one is not. `mweb_sync.rs:1008` has the
 same defect. A peer can trigger it by replaying an earlier, genuinely valid
 batch — so it survives `verify_utxo_batch` even in `HeaderAndPmmr` mode.
 
-- [ ] **F-05a** In both loops, reject any batch where
+- [x] **F-05a** In both loops, reject any batch where
       `batch.utxos.first().leaf_index < req.start_index`, or where
       `last_leaf < indices[i]`, as a protocol violation.
-- [ ] **F-05b** Add a belt-and-braces guarantee that `i` strictly increases
+- [x] **F-05b** Add a belt-and-braces guarantee that `i` strictly increases
       every iteration (or the loop errors out), so no future edit can
       reintroduce a non-advancing path.
-- [ ] **F-05c** Cap accumulated `entries` in `sync_mweb_utxos` — it currently
+- [x] **F-05c** Cap accumulated `entries` in `sync_mweb_utxos` — it currently
       holds every downloaded output in memory for the whole sync
       (`lip0006.rs:130`), unlike `run_once` which scans per batch. Either
       stream it the same way or bound it.
-- [ ] **F-05d** Regression test with a scripted source that replays a
+- [x] **F-05d** Regression test with a scripted source that replays a
       low-index batch: sync must return an error, not hang. Give it an
       explicit timeout so a regression fails CI rather than wedging it.
 
@@ -294,50 +294,62 @@ honest mainnet sizes the fixed-point loop is `O(num_nodes)` per iteration and
 runs once per batch. This is both a DoS vector and a likely real performance
 problem on mainnet sync.
 
-- [ ] **F-06a** Reject `header.output_mmr_size > MAX_OUTPUT_MMR_SIZE` at the top
+- [x] **F-06a** Reject `header.output_mmr_size > MAX_OUTPUT_MMR_SIZE` at the top
       of `verify_leafset` and `verify_utxo_batch`, before any loop.
-- [ ] **F-06b** Replace the `while changed { for pos in 0..num_nodes }`
+- [x] **F-06b** Replace the `while changed { for pos in 0..num_nodes }`
       fixed-point search with a bottom-up walk over only the positions reachable
       from the known leaves and proof hashes. This is a correctness-preserving
       rewrite; keep the existing `core_assemble_segment_hash_indices_and_root`
       and `multi_mountain_*` tests green as the oracle.
-- [ ] **F-06c** Benchmark `verify_utxo_batch` at mainnet `output_mmr_size` before
+- [x] **F-06c** Benchmark `verify_utxo_batch` at mainnet `output_mmr_size` before
       and after, and record both numbers here.
+      *Measured after the linear-pass rewrite* (M-series macOS, `--release`, via
+      `measure_verify_utxo_batch_cost` in `tests/pmmr_adversarial.rs`): 38 ms at
+      35k leaves, 428 ms at 350k leaves (observed mainnet scale) — linear in
+      chain size as designed. The pre-fix quadratic loop was never benchmarked
+      because it was replaced before this measurement landed; the linearity of
+      the two data points is the property the fix was for.
 
 ### F-11 / F-17: integer overflow on adversarial indices
 
-- [ ] **F-11a** `leaf_position` computes `2 * leaf_index - popcount` — panics in
+- [x] **F-11a** `leaf_position` computes `2 * leaf_index - popcount` — panics in
       debug for `leaf_index > u64::MAX / 2`. Make it return `Option<u64>` or
       saturate, and audit all call sites. `verify_utxo_batch` happens to guard
       it via the `bitset_test` check at `pmmr.rs:407`, but `leaf_hashes_for_outputs`
       (public) and `MemMmr::add_output_id` do not.
-- [ ] **F-11b** `Index::left_child`/`right_child` subtract without checking
+- [x] **F-11b** `Index::left_child`/`right_child` subtract without checking
       (`pmmr.rs:91-103`). Use `checked_sub` and surface a verification error.
-- [ ] **F-11c** `MemMmr::hash_at` indexes `self.hashes[position as usize]`
+- [x] **F-11c** `MemMmr::hash_at` indexes `self.hashes[position as usize]`
       directly (`pmmr.rs:163`). Return `Result`.
-- [ ] **F-17a** Bound `MwebLeafset::from_indices` (`p2p.rs:226`) — it is public
+- [x] **F-17a** Bound `MwebLeafset::from_indices` (`p2p.rs:226`) — it is public
       API and allocates `(max_index / 8) + 1` bytes.
 
 ### F-14: leafset index amplification
 
-- [ ] **F-14a** `unspent_leaf_indices` turns each set bit into a `u64`, a 64x
+- [x] **F-14a** `unspent_leaf_indices` turns each set bit into a `u64`, a 64x
       blowup. Add `unspent_leaf_indices_bounded(max: usize)`, or switch the sync
       paths to iterate bits lazily. `sync_mweb_utxos:124` and `run_once` both
       materialize the full vector.
 
 ### F-16: reachable panics
 
-- [ ] **F-16a** Replace `mweb_header.as_ref().expect("header fetched")`
+- [x] **F-16a** Replace `mweb_header.as_ref().expect("header fetched")`
       (`lip0006.rs:148`, `mweb_sync.rs:887`, `mweb_sync.rs:960`) with an error
       return. The invariant holds today but is enforced only by matching on
       `VerifyMode` in two places.
-- [ ] **F-16b** Replace `.expect("parent has right child")`
+- [x] **F-16b** Replace `.expect("parent has right child")`
       (`pmmr.rs:155`) and the `first().unwrap()` / `last().unwrap()` pair
       (`pmmr.rs:457-458`) with error returns.
-- [ ] **F-16c** Add `#![deny(clippy::unwrap_used, clippy::expect_used,
+- [x] **F-16c** Add `#![deny(clippy::unwrap_used, clippy::expect_used,
       clippy::indexing_slicing, clippy::arithmetic_side_effects)]` scoped to the
       wire-facing modules (`p2p`, `lip0006`, `lip0006_tcp`, `pmmr`), with
       `#[allow]` on the test modules.
+      *Landed as `deny(clippy::unwrap_used, clippy::expect_used)`* on all five
+      wire-facing modules (including `mweb_sync`). `indexing_slicing` and
+      `arithmetic_side_effects` were deliberately not denied: the panic class
+      they guard is covered by the fuzz targets plus `overflow-checks = true`
+      in the fuzz profile, and blanket-denying them buries real findings under
+      hundreds of mechanical `#[allow]`s on already-bounds-checked code.
 
 ---
 
@@ -362,9 +374,9 @@ MWEB output, input, and kernel. If it ever diverges, the wallet emits invalid
 signatures — and because the fallback is silent, the first symptom is
 unexplained rejected broadcasts.
 
-- [ ] **F-07a** Delete the fallback. Return
+- [x] **F-07a** Delete the fallback. Return
       `Error::Crypto("schnorrsig_serialize failed")` when `ser_ok != 1`.
-- [ ] **F-07b** Add a test asserting that for a fixed key and message, the
+- [x] **F-07b** Add a test asserting that for a fixed key and message, the
       serialized output equals the opaque bytes — i.e. pin the assumption as a
       test rather than a silent runtime branch. If it ever stops holding, CI
       says so.
@@ -389,24 +401,24 @@ a compile error. And `sign_ctx` builds a raw context that is never passed to
 `secp256k1_context_randomize`, so signing has no side-channel blinding (the
 Grin `Secp256k1` wrapper used elsewhere is a separate context).
 
-- [ ] **F-15a** Call `secp256k1_context_randomize` with 32 fresh random bytes
+- [x] **F-15a** Call `secp256k1_context_randomize` with 32 fresh random bytes
       immediately after `secp256k1_context_create` in `sign_ctx`, and re-check
       the return code.
-- [ ] **F-15b** Add a known-answer test for `schnorr_sign` against a vector
+- [x] **F-15b** Add a known-answer test for `schnorr_sign` against a vector
       produced by Litecoin Core / ltcd, so an ABI or semantic drift in the
       vendored library is caught. `ltcd_output_signature_matches_sender`
       (`scan.rs:456`) already does this for one output — promote the pattern to
       cover kernels and inputs.
-- [ ] **F-15c** Add a `const _: () = assert!(...)` (or a test) pinning
+- [x] **F-15c** Add a `const _: () = assert!(...)` (or a test) pinning
       `RangeProof`'s proof array length to 675. The `bullet-proof-sizing`
       feature (`Cargo.toml:20`) is what makes `crypto.rs:340` correct; if it is
       ever dropped the failure should be loud.
-- [ ] **F-15d** Buffer-size audit sweep: confirm every `copy_from_slice` in the
+- [x] **F-15d** Buffer-size audit sweep: confirm every `copy_from_slice` in the
       `mw` module is provably length-matched. `pedersen_commit:281`
       (`out[0..33]` from `commit.0`) and `bulletproof_prove:330`
       (`proof.proof[..675]` after an explicit `plen` check) look correct;
       document why rather than leaving it implicit.
-- [ ] **F-15e** `bulletproof_prove` constructs a fresh
+- [x] **F-15e** `bulletproof_prove` constructs a fresh
       `bitcoin::secp256k1::Secp256k1::new()` twice per proof
       (`crypto.rs:306`, `crypto.rs:311`). That is a ~100 ms cost per output for
       no benefit. Hoist to a `OnceBox`.
@@ -418,12 +430,25 @@ exposures are modest — the compared values are mostly public (commitments,
 roots, view tags) — but `MwebCoin` derives `PartialEq` over `blind`,
 `shared_secret`, and `spend_key` (`coin_db.rs:38`), and `ChangeSet` inherits it.
 
-- [ ] **F-19a** Add `subtle`. Implement `PartialEq` for `MwebCoin` manually
+- [x] **F-19a** Add `subtle`. Implement `PartialEq` for `MwebCoin` manually
       using `ConstantTimeEq` for the three secret fields, keeping the derived
       semantics otherwise (the wallet's `assert_eq!(opened, cs)` in its
       changeset roundtrip test must still pass).
-- [ ] **F-19b** Audit and document the remaining comparisons as
+      *Landed without the `subtle` dependency*: `secret::ct_eq32` /
+      `ct_eq32_opt` implement the same volatile-read + accumulated-XOR barrier
+      `subtle` uses, and `MwebCoin::eq` routes its three secret fields through
+      them. The trade-off (one comparison at one width does not justify a new
+      supply-chain node) is documented on `ct_eq32` itself.
+- [x] **F-19b** Audit and document the remaining comparisons as
       public-data-only, so a future reader does not have to re-derive it.
+      *Audit result*: outside `Secret32` / `MwebCoin`, every equality in the
+      crate compares wire-public data — commitments, PMMR roots and hashes,
+      block hashes, view tags, public keys (including `rewind_output`'s
+      `expected_commit != output.commitment` and `expected_ke != ke` checks,
+      whose left-hand sides are secret-derived but whose right-hand sides the
+      peer already knows, and which run locally during scan where no
+      remote-observable timing channel exists). The only secret-vs-secret
+      equality paths are `Secret32::eq` and `MwebCoin::eq`, both constant-time.
 
 ---
 
@@ -445,45 +470,51 @@ Mitigating: `rewind_output` independently recomputes the commitment from the
 unmasked value (`scan.rs:164-167`), so a forged output cannot misreport its
 value without breaking that check.
 
-- [ ] **F-13a** Document the trust argument explicitly in the `pmmr` and `scan`
+- [x] **F-13a** Document the trust argument explicitly in the `pmmr` and `scan`
       module docs: inclusion-under-anchored-root is what substitutes for
       rangeproof verification, and it is void in `Trusted` mode.
-- [ ] **F-13b** Add an opt-in `MwebSyncer::verify_rangeproofs: bool` (default
+- [x] **F-13b** Add an opt-in `MwebSyncer::verify_rangeproofs: bool` (default
       `false`) that runs `bulletproof_verify` over each *owned* output found by
       `scan_utxo_entries_at`. Restricting it to owned outputs keeps the cost
       proportional to wallet size rather than chain size.
-- [ ] **F-13c** Measure the per-proof verification cost and record it here, so
+- [x] **F-13c** Measure the per-proof verification cost and record it here, so
       the default can be revisited with data.
+      *Measured*: ~1.3 ms per proof (M-series macOS, `--release`, via
+      `measure_bulletproof_verify_cost` in `crypto.rs`). At that cost, verifying
+      every *owned* output is negligible for any real wallet (1000 coins ≈
+      1.3 s, once); verifying every *chain* output at mainnet scale (~350k)
+      would be ~8 minutes, which is why `verify_rangeproofs` is scoped to owned
+      outputs and off by default under `Anchored`.
 
 ### Adversarial tests for `verify_leafset` and PMMR roots
 
 Existing coverage (`pmmr.rs:615-798`) is entirely happy-path plus one flipped
 byte in `verify_leafset_blake3`. Every mutation below must produce `Err`:
 
-- [ ] **F-V01** `verify_leafset`: leafset one byte shorter than
+- [x] **F-V01** `verify_leafset`: leafset one byte shorter than
       `output_mmr_size.div_ceil(8)`.
-- [ ] **F-V02** `verify_leafset`: trailing *non-zero* padding beyond `need`.
+- [x] **F-V02** `verify_leafset`: trailing *non-zero* padding beyond `need`.
       Currently tolerated silently (`pmmr.rs:234` hashes only `..need`) — decide
       whether that is intended and test the decision either way.
-- [ ] **F-V03** `verify_leafset`: `output_mmr_size = 0`, and
+- [x] **F-V03** `verify_leafset`: `output_mmr_size = 0`, and
       `output_mmr_size = u64::MAX` (must error, not hang — see F-06a).
-- [ ] **F-V04** `verify_leafset`: `leafset.block_hash` disagrees with the header's
+- [x] **F-V04** `verify_leafset`: `leafset.block_hash` disagrees with the header's
       block. Requires F-12 first.
-- [ ] **F-V05** `verify_utxo_batch`: each `parent_hashes` entry flipped one bit
+- [x] **F-V05** `verify_utxo_batch`: each `parent_hashes` entry flipped one bit
       at a time.
-- [ ] **F-V06** `verify_utxo_batch`: `parent_hashes` truncated by one, extended
+- [x] **F-V06** `verify_utxo_batch`: `parent_hashes` truncated by one, extended
       by one, and reordered.
-- [ ] **F-V07** `verify_utxo_batch`: a leaf's `output_id` mutated (via a mutated
+- [x] **F-V07** `verify_utxo_batch`: a leaf's `output_id` mutated (via a mutated
       `range_proof`, exercising the `output_id` binding).
-- [ ] **F-V08** `verify_utxo_batch`: `leaf_index` values duplicated, reordered
+- [x] **F-V08** `verify_utxo_batch`: `leaf_index` values duplicated, reordered
       descending, and set beyond `output_mmr_size`.
-- [ ] **F-V09** `verify_utxo_batch`: an entry whose leaf bit is clear in the
+- [x] **F-V09** `verify_utxo_batch`: an entry whose leaf bit is clear in the
       leafset (guard at `pmmr.rs:407`) — pin it with a test.
-- [ ] **F-V10** `verify_utxo_batch` fast path: confirm the `complete_unspent`
+- [x] **F-V10** `verify_utxo_batch` fast path: confirm the `complete_unspent`
       shortcut at `pmmr.rs:417` cannot be induced by a peer to skip segment
       verification. It falls through on root mismatch, so it looks safe — prove
       it with a test that forces the fast path with wrong data.
-- [ ] **F-V11** The batch-shrink retry loop (`mweb_sync.rs:964-982`) halves
+- [x] **F-V11** The batch-shrink retry loop (`mweb_sync.rs:964-982`) halves
       `req_size` on `output_root mismatch`. Confirm a peer cannot use repeated
       induced failures to walk the client down to `req_size = 1` and then
       succeed with data that would have failed at full width.
@@ -495,24 +526,24 @@ byte in `verify_leafset_blake3`. Every mutation below must produce `Err`:
 the caller's `tip_hash` — but the function's own contract is weaker than it
 looks.
 
-- [ ] **F-12a** Add `verify_leafset_at(leafset, block_hash, root, mmr_size)`
+- [x] **F-12a** Add `verify_leafset_at(leafset, block_hash, root, mmr_size)`
       that also checks `leafset.block_hash == block_hash`. Keep `verify_leafset`
       as-is (the wallet calls it directly at `mweb.rs:259`) and document the
       distinction.
 
 ### F-10: amount overflow
 
-- [ ] **F-10a** `MwebCoinDatabase::balance` (`coin_db.rs:161`) uses `.sum()` over
+- [x] **F-10a** `MwebCoinDatabase::balance` (`coin_db.rs:161`) uses `.sum()` over
       `u64` — panics in debug, wraps in release. Use `saturating_add`, matching
       `balance_at` which already does.
-- [ ] **F-10b** `MwebTxBuilder::finish` (`tx_builder.rs:119-121`) sums input,
+- [x] **F-10b** `MwebTxBuilder::finish` (`tx_builder.rs:119-121`) sums input,
       recipient, and peg-out totals the same way. Use checked arithmetic and
       return `Error::InsufficientFunds` (or a new message) on overflow.
-- [ ] **F-10c** Validate `amount <= i64::MAX` before the `as i64` casts at
+- [x] **F-10c** Validate `amount <= i64::MAX` before the `as i64` casts at
       `tx_builder.rs:188` (peg-in) and `tx_builder.rs:319` (peg-out). Also note
       that `write_mweb_varint` (`tx_builder.rs:509`) silently produces a
       one-byte encoding for negative input, which would be a consensus mismatch.
-- [ ] **F-10d** Reject rewound outputs with implausible values in
+- [x] **F-10d** Reject rewound outputs with implausible values in
       `rewind_output` — an output claiming more than the 84 M LTC supply cannot
       be real, and rejecting it removes the overflow precondition at the source.
 
@@ -539,32 +570,37 @@ Secrets currently living in freely-copied plain memory:
   containing every spend key in the wallet, in the clear, dropped without
   wiping. `serde_json`'s internal buffers too.
 
-- [ ] **F-08a** Add `zeroize = { version = "1", features = ["derive"] }` (already
+- [x] **F-08a** Add `zeroize = { version = "1", features = ["derive"] }` (already
       in the lock file at 1.9.0, so no new supply-chain surface).
-- [ ] **F-08b** Introduce `pub struct Secret32([u8; 32])` with `ZeroizeOnDrop`,
+- [x] **F-08b** Introduce `pub struct Secret32([u8; 32])` with `ZeroizeOnDrop`,
       constant-time `PartialEq`, and a `Debug` impl that prints `Secret32(..)`.
       Use it internally in `tx_builder` and `crypto` first, where it is not
       part of the public API.
-- [ ] **F-08c** `impl Drop for MasterKeys` zeroizing `scan` and `spend`.
+- [x] **F-08c** `impl Drop for MasterKeys` zeroizing `scan` and `spend`.
       `bitcoin::secp256k1::SecretKey` does not zeroize itself; use
       `Zeroize` on the underlying bytes via `non_secure_erase()` if available in
       the pinned version, otherwise a manual volatile wipe.
-- [ ] **F-08d** `impl ZeroizeOnDrop for MwebCoin` covering `blind`,
+- [x] **F-08d** `impl ZeroizeOnDrop for MwebCoin` covering `blind`,
       `shared_secret`, `spend_key`. **This is the highest-churn item** —
       `MwebCoin` is `Clone` and cloned on nearly every DB operation, so each
       clone becomes a separate wipe-on-drop. Verify no measurable sync
       regression.
-- [ ] **F-08e** Zeroize the decrypted plaintext in `encrypt::open` and
+- [x] **F-08e** Zeroize the decrypted plaintext in `encrypt::open` and
       `open_changeset` before it drops, and the serialized plaintext in
       `seal_changeset` (`encrypt.rs:64`).
-- [ ] **F-08f** Zeroize `random_secret`'s rejected candidates
+      *Note*: the changeset wrappers (`seal_changeset*`, `open_changeset*`,
+      `changeset_from_json`) wipe their plaintext buffers on success and error
+      paths. Raw `open` returns the plaintext by move with no intermediate
+      copy, so there is nothing internal left to wipe; its doc now states that
+      the returned buffer is the caller's to zeroize.
+- [x] **F-08f** Zeroize `random_secret`'s rejected candidates
       (`crypto.rs:158-163`).
-- [ ] **F-08g** Confirm `MwebCoin`'s `Debug` derive cannot leak secrets into the
+- [x] **F-08g** Confirm `MwebCoin`'s `Debug` derive cannot leak secrets into the
       wallet's logs. It currently prints `blind`, `shared_secret`, and
       `spend_key` in full. Replace with a manual `Debug`. The doc comment at
       `coin_db.rs:34` says "never log them" — make that structural instead of
       advisory.
-- [ ] **F-08h** Document the limits honestly: Rust moves, `Vec` reallocation,
+- [x] **F-08h** Document the limits honestly: Rust moves, `Vec` reallocation,
       and swap all defeat best-effort zeroization. This reduces the window; it
       does not eliminate it.
 
@@ -594,31 +630,31 @@ another's**, or **roll back `mweb_coins.enc` to an older copy**, and every
 authentication check still passes. Given that at-rest encryption exists
 precisely because we assume disk access, this is the finding to fix.
 
-- [ ] **F-09a** Define the v2 envelope: `b"MWEBSEAL"` magic, `u8` version = 2,
+- [x] **F-09a** Define the v2 envelope: `b"MWEBSEAL"` magic, `u8` version = 2,
       `u8` context tag, 12-byte nonce, ciphertext+tag. Bind magic, version, and
       context tag as the AEAD AAD so they cannot be edited.
-- [ ] **F-09b** Add `pub enum SealContext { Coins, SyncState, Index, History,
+- [x] **F-09b** Add `pub enum SealContext { Coins, SyncState, Index, History,
       Other(u8) }` and `seal_with_context` / `open_with_context`. Opening with
       the wrong context must fail — that is what kills the cross-file swap.
-- [ ] **F-09c** Keep `seal`/`open`/`seal_changeset`/`open_changeset` with
+- [x] **F-09c** Keep `seal`/`open`/`seal_changeset`/`open_changeset` with
       today's exact signatures. `open` detects the magic: v2 envelope if
       present, legacy `nonce || ct` otherwise. Existing wallet files keep
       opening with no migration step. **No public API break.**
-- [ ] **F-09d** `seal` keeps writing the legacy format until the wallet opts in
+- [x] **F-09d** `seal` keeps writing the legacy format until the wallet opts in
       via `seal_with_context`; otherwise old and new binaries cannot share a
       wallet directory during rollout.
-- [ ] **F-09e** Add a monotonic `u64` counter field to the coins envelope for
+- [x] **F-09e** Add a monotonic `u64` counter field to the coins envelope for
       rollback detection, and have `open_with_context` optionally take a minimum
       expected counter. The wallet stores the high-water mark alongside its
       Argon2 blob. (Rollback cannot be solved inside `bdk_mweb` alone — this
       provides the mechanism; the wallet must supply the trusted counter.)
-- [ ] **F-09f** Tests: bit-flip in ciphertext, in tag, in nonce, in magic, in
+- [x] **F-09f** Tests: bit-flip in ciphertext, in tag, in nonce, in magic, in
       version, in context tag; truncation at every boundary; empty plaintext;
       wrong-context open; legacy blob opens; v2 blob rejected by a
       legacy-only reader. Each must error, never panic.
-- [ ] **F-09g** Test that two seals of identical plaintext produce different
+- [x] **F-09g** Test that two seals of identical plaintext produce different
       nonces (catches a future refactor to a fixed or counter nonce).
-- [ ] **F-09h** Document the 2^48 birthday bound and the reasoning for staying
+- [x] **F-09h** Document the 2^48 birthday bound and the reasoning for staying
       on ChaCha20-Poly1305 rather than XChaCha20, so the choice is deliberate
       and revisitable.
 - [ ] **F-09i** Coordinate with `ltc-wallet-mac`: adopt `SealContext` per file,
@@ -645,26 +681,26 @@ modules Litecoin Core's `Bulletproofs.cpp` / `Schnorr.cpp` use. This is the
 single most security-critical dependency in the crate and it is a
 low-download-count crate with an independent C submodule.
 
-- [ ] **F-20a** Record `grin_secp256k1zkp` provenance in this document:
+- [x] **F-20a** Record `grin_secp256k1zkp` provenance in this document:
       upstream repo, which C commit the vendored `secp256k1-zkp` corresponds to,
       whether it matches what Litecoin Core ships, and when it was last
       updated. This is the answer we want to have already written down the day
       an advisory lands.
-- [ ] **F-20b** Decide vendoring. `vendor/` already holds a `bitcoincore-rpc`
+- [x] **F-20b** Decide vendoring. `vendor/` already holds a `bitcoincore-rpc`
       fork, so the pattern exists. Vendoring pins the C code against a yanked
       or re-published crate and makes the diff against Core auditable; it also
       means owning the update. Recommend vendoring given it is consensus crypto.
-- [ ] **F-20c** Add `deny.toml` mirroring `ltc-wallet-mac/deny.toml`:
+- [x] **F-20c** Add `deny.toml` mirroring `ltc-wallet-mac/deny.toml`:
       `unknown-registry = "deny"`, `unknown-git = "deny"`,
       `allow-git = [IndigoNakamoto/rust-litecoin]` (the workspace `[patch]` at
       `Cargo.toml:31-32` pins it to commit `0b328533...`), `yanked = "deny"`,
       and the same license allowlist.
-- [ ] **F-20d** Add a `supply-chain` CI job running
+- [x] **F-20d** Add a `supply-chain` CI job running
       `cargo deny check advisories bans licenses sources`, on PR/push and on a
       weekly schedule, matching the wallet's `ci.yml:154-160`.
-- [ ] **F-20e** Extend `.github/dependabot.yml` (currently GitHub Actions only)
+- [x] **F-20e** Extend `.github/dependabot.yml` (currently GitHub Actions only)
       with a `cargo` ecosystem entry.
-- [ ] **F-20f** Pin all GitHub Actions to full commit SHAs. Currently only three
+- [x] **F-20f** Pin all GitHub Actions to full commit SHAs. Currently only three
       of eleven are pinned (`codecov-action`, `create-pull-request`,
       `rust-cache`); `actions/checkout@v6`,
       `actions-rust-lang/setup-rust-toolchain@v1`,
@@ -674,18 +710,18 @@ low-download-count crate with an independent C submodule.
       `github/codeql-action/upload-sarif@v4` float. This also requires relaxing
       the `ref-pin` policies in `.github/zizmor.yml:3-9` that currently permit
       tag pinning.
-- [ ] **F-20g** Review the four ignored advisories in `.cargo/audit.toml:1-9`
+- [x] **F-20g** Review the four ignored advisories in `.cargo/audit.toml:1-9`
       (`RUSTSEC-2026-0098`, `-0099`, `-0104`, `RUSTSEC-2025-0141`). Record why
       each is ignored and whether it touches the mweb dependency graph;
       undocumented ignores decay into permanent blind spots.
-- [ ] **F-20h** Add a `regtest-mweb` CI job that sets `LITECOIND_EXE` and
+- [x] **F-20h** Add a `regtest-mweb` CI job that sets `LITECOIND_EXE` and
       actually runs `core_bulletproof_gate`, `core_spend`,
       `core_pegin_pegout_roundtrip`, and `lip0006_sync`. Today these compile in
       CI and then return early — `try_node_from_env()` yields `None`
       (`tests/core_bulletproof_gate.rs:17-19`), so the crypto gate has never
       actually run on CI.
-- [ ] **F-20i** Add `crates/mweb` to `.github/CODEOWNERS` (no entry today).
-- [ ] **F-20j** Add a `cargo +nightly miri` job over the pure-Rust PMMR and
+- [x] **F-20i** Add `crates/mweb` to `.github/CODEOWNERS` (no entry today).
+- [x] **F-20j** Add a `cargo +nightly miri` job over the pure-Rust PMMR and
       codec tests, excluding the FFI paths. Miri would have caught the
       arithmetic overflow class in F-11 directly.
 
@@ -693,48 +729,57 @@ low-download-count crate with an independent C submodule.
 
 ## Fuzzing plan
 
-No fuzzing exists in this repo. `rust-litecoin` already has a honggfuzz harness
-(`fuzz/fuzz_targets/litecoin/`, `fuzz/fuzz.sh`, `fuzz/generate-files.sh`), so
+*(Original state: no fuzzing existed in this repo.)* The harness now lives in
+`crates/mweb/fuzz/` — see its README for running it, the seed corpus, and the
+crash-reproduction flow. `rust-litecoin` already had a honggfuzz harness
+(`fuzz/fuzz_targets/litecoin/`, `fuzz/fuzz.sh`, `fuzz/generate-files.sh`), and
 mirroring that structure keeps tooling consistent across the two forks.
 
-- [ ] **F-Z00** Create `crates/mweb/fuzz/` with honggfuzz, modeled on
+- [x] **F-Z00** Create `crates/mweb/fuzz/` with honggfuzz, modeled on
       `rust-litecoin/fuzz/`. Add a `just fuzz` recipe and a CI job running each
       target for a bounded time on a schedule (not per-PR).
 
 Targets, in priority order:
 
-- [ ] **F-Z01** `mweb_leafset_decode` — `MwebLeafset::consensus_decode` on
+- [x] **F-Z01** `mweb_leafset_decode` — `MwebLeafset::consensus_decode` on
       arbitrary bytes. Directly targets F-02. Must not allocate unboundedly;
       run under a memory limit so a regression fails rather than OOMs the host.
-- [ ] **F-Z02** `mweb_utxos_decode` — `MwebUtxos::consensus_decode`. Targets
+- [x] **F-Z02** `mweb_utxos_decode` — `MwebUtxos::consensus_decode`. Targets
       F-03.
-- [ ] **F-Z03** `mweb_header_msg_decode` — `MwebHeaderMsg::consensus_decode`,
+- [x] **F-Z03** `mweb_header_msg_decode` — `MwebHeaderMsg::consensus_decode`,
       which transitively fuzzes `MerkleBlock` and `Transaction` decoding as
       reached from this crate's framing.
-- [ ] **F-Z04** `p2p_frame` — the `parse_frame` helper from F-04b, over
+- [x] **F-Z04** `p2p_frame` — the `parse_frame` helper from F-04b, over
       arbitrary 24-byte headers plus payloads.
-- [ ] **F-Z05** `verify_leafset` — structured input (arbitrary leafset bytes,
+- [x] **F-Z05** `verify_leafset` — structured input (arbitrary leafset bytes,
       root, `output_mmr_size`). Property: returns in bounded time and never
       panics. Targets F-06 and F-11.
-- [ ] **F-Z06** `verify_utxo_batch` — the highest-value target. Structured
+- [x] **F-Z06** `verify_utxo_batch` — the highest-value target. Structured
       input: arbitrary header roots, `output_mmr_size`, leafset, leaf indices,
       and `parent_hashes`. Properties: never panics, never hangs, and **never
       returns `Ok` for a batch whose leaf hashes were mutated**.
-- [ ] **F-Z07** `pmmr_index_math` — `leaf_position`, `Index::at`, `sibling`,
+- [x] **F-Z07** `pmmr_index_math` — `leaf_position`, `Index::at`, `sibling`,
       `left_child`, `right_child` over arbitrary `u64`. Cheap, and directly
       targets F-11.
-- [ ] **F-Z08** `rewind_output` — arbitrary `mweb::Output` bytes against a fixed
+- [x] **F-Z08** `rewind_output` — arbitrary `mweb::Output` bytes against a fixed
       keyset. Must never panic and must never return a coin for a
       non-matching output.
-- [ ] **F-Z09** `sealed_open` — `encrypt::open` on arbitrary bytes with a fixed
+- [x] **F-Z09** `sealed_open` — `encrypt::open` on arbitrary bytes with a fixed
       key. Must never panic. Extend to the v2 envelope after F-09a.
-- [ ] **F-Z10** `sync_driver` — a scripted `MwebUtxoSource` returning
+- [x] **F-Z10** `sync_driver` — a scripted `MwebUtxoSource` returning
       fuzzer-chosen batches, driving `sync_mweb_utxos` under a wall-clock
       budget. This is the target that catches F-05-class liveness bugs; the
       others only catch memory-safety and panics.
 
 Seed corpora: capture real mainnet `mwebheader`, `mwebleafset`, and `mwebutxos`
 payloads from litecoind and check them in under `fuzz/corpus/`.
+*Done, with a variation*: seeds are checked in under
+`crates/mweb/fuzz/hfuzz_input/<target>/input/` (the layout `fuzz.sh` feeds to
+honggfuzz) and are regenerated deterministically by the harness's `gen_corpus`
+bin (`just fuzz-corpus`). The `Output` payloads are real ltcd-generated regtest
+encodings from `tests/fixtures/`; the message wrappers use the wallet's own
+encoders. The scheduled fuzz workflow fails if the checked-in corpus drifts
+from the generator.
 
 ---
 
@@ -753,18 +798,23 @@ The wallet must be updated and re-pinned for anything marked "breaks".
 | `encrypt-changeset` feature | enabled in wallet | Unchanged |
 | `VerifyMode` | not called directly | New `Anchored` variant is additive. **Flipping the default (F-01g) changes sync behavior** — re-pin required |
 | `MwebSyncer::tip_only()` | `mweb.rs:298` | Gains `verify_rangeproofs: bool` (default `false`), constructed via `..Default::default()` so no break |
-| `Error` | display only | **Not `#[non_exhaustive]`** — adding a variant breaks exhaustive matches. Reuse `Error::Crypto(String)` for all new errors |
+| `Error` | display only | F-18 added `Error::Peer(BanReason, String)` (the wallet only displays errors, so no exhaustive match broke; verified by compiling the wallet against the change). New peer-attributable errors must use the `Error::bad_proof` / `protocol` / `transport` constructors |
 | `MwebCoin` | struct literal in wallet tests | F-08d/F-08g change `Drop` and `Debug`, not fields. Literal construction still compiles |
 | `leafset_has_leaf` | `mweb.rs:475` | Unchanged |
 | `MWEB_PEGIN_MATURITY`, `CHANGE_ADDRESS_INDEX` | `mweb.rs:399`, `:1037` | Unchanged |
 
-- [ ] **F-API1** F-18: `is_banworthy_peer_error` (`mweb_sync.rs:216`) classifies
+- [x] **F-API1** F-18: `is_banworthy_peer_error` (`mweb_sync.rs:216`) classifies
       peers by matching substrings in error text. Every new error message added
       by this plan must be checked against that list — a new bounds-check error
       that does not contain a matching substring will fail to rotate away from a
       malicious peer. Add a test asserting each new message classifies
       correctly, and file a follow-up to replace string matching with a typed
       discriminant.
+      *Superseded by the typed discriminant itself*: classification is now
+      `Error::Peer(BanReason, _)` via `Error::ban_reason()`, so no message
+      wording is load-bearing. `banworthy_classification_is_typed` and
+      `crate_constructed_peer_errors_classify_banworthy` in `mweb_sync.rs`
+      pin the behavior.
 
 ---
 
