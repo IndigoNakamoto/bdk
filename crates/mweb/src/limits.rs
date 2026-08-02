@@ -71,6 +71,9 @@ pub(crate) const RESERVE_CHUNK: usize = 1024;
 /// Litecoin mainnet was near 350k MWEB leaves in mid-2026 (`docs/LITECOIN_E2E.md`).
 /// The caps must stay far enough above that to never become the binding constraint
 /// on live sync before someone revisits them.
+// Used only by the const assertions below; rustc before 1.93 does not count a use
+// inside an anonymous `const _` as a use, so the MSRV build needs this.
+#[allow(dead_code)]
 const OBSERVED_MAINNET_LEAVES: u64 = 350_000;
 
 // These relationships are the derivation, not incidental values. Checking them at

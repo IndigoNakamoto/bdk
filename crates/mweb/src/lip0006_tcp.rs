@@ -379,7 +379,7 @@ impl TcpMwebPeer {
 
 /// Validate a P2P message header against `magic` and return its declared payload length.
 ///
-/// Split out from [`TcpMwebPeer::recv`] so the framing rules are testable and
+/// Split out from `TcpMwebPeer::recv` so the framing rules are testable and
 /// fuzzable without a socket. Errors are worded "protocol violation" rather than
 /// "p2p read" so they are treated as peer misbehavior (ban and rotate) instead of
 /// a transient IO fault worth reconnecting for.

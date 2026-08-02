@@ -73,3 +73,7 @@ required-features = ["lip0006", "zkp"]
 [[example]]
 name = "verify_mainnet_batch"
 required-features = ["lip0006"]
+
+[[example]]
+name = "capture_mwebheader"
+required-features = ["lip0006"]

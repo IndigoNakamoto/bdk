@@ -824,17 +824,13 @@ mod tests {
     /// [`MwebHeaderMsg::verify_anchored`] against what the network actually
     /// commits to: a drift in `MwebBlockHeader`'s serialization, the blake3
     /// domain, or the commitment-script shape all fail this test offline.
-    #[cfg(feature = "std")]
     #[test]
     fn mainnet_header_hash_known_answer() {
-        extern crate std;
         use hex_conservative::FromHex;
 
-        let path = alloc::format!(
-            "{}/tests/fixtures/mainnet_mwebheader_3152700.hex",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let raw = std::fs::read_to_string(&path).unwrap();
+        // Embedded rather than read at runtime so the test also runs under Miri,
+        // which is executed with filesystem isolation enabled.
+        let raw = include_str!("../tests/fixtures/mainnet_mwebheader_3152700.hex");
         let bytes = <alloc::vec::Vec<u8>>::from_hex(raw.trim()).unwrap();
         let msg: MwebHeaderMsg = deserialize(&bytes).unwrap();
 
