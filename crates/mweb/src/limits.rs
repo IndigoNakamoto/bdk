@@ -15,20 +15,20 @@
 
 /// Largest P2P message payload accepted from a peer, in bytes.
 ///
-/// Core's `MAX_PROTOCOL_MESSAGE_LENGTH` (4 MB) is the limit litecoind enforces on
-/// *receive*, so an honest peer never sends more than that. This cap is Core's
-/// `MAX_SIZE` (32 MiB) instead, leaving ~8x headroom so a protocol change cannot
-/// silently break live sync, while still bounding a single allocation to a sane
-/// size.
+/// Litecoin's `MAX_PROTOCOL_MESSAGE_LENGTH` is 32 MB (`net.h`) — eight times
+/// Bitcoin Core's 4 MB, raised because MWEB payloads are large. That is the limit
+/// litecoind enforces on *receive*, so an honest peer never sends more. This cap
+/// is Core's `MAX_SIZE` (32 MiB), just above it, so a protocol change cannot
+/// silently break live sync while a single allocation stays bounded.
 pub const MAX_P2P_PAYLOAD: usize = 32 * 1024 * 1024;
 
 /// Largest `mwebleafset` bitset accepted, in bytes.
 ///
-/// A leafset is delivered as a single P2P message, and litecoind refuses to
-/// *receive* a message larger than Core's `MAX_PROTOCOL_MESSAGE_LENGTH` (4 MB), so
-/// an honest leafset cannot exceed that no matter how large the chain grows. This
-/// is deliberately tighter than [`MAX_P2P_PAYLOAD`], because the leafset also sizes
-/// the index vectors built by [`crate::p2p::MwebLeafset::unspent_leaf_indices`].
+/// Deliberately far tighter than the 32 MB the protocol would allow, because the
+/// leafset also sizes the index vectors built by
+/// [`crate::p2p::MwebLeafset::unspent_leaf_indices`]. 4 MB is one bit per leaf for
+/// 32 million leaves against roughly 350 thousand on mainnet today, so this is a
+/// policy choice with ~90x headroom rather than a bound derived from the wire.
 pub const MAX_LEAFSET_BYTES: usize = 4_000_000;
 
 /// Largest `output_mmr_size` accepted from a peer's MWEB header.
@@ -43,7 +43,23 @@ pub const MAX_OUTPUT_MMR_SIZE: u64 = (MAX_LEAFSET_BYTES as u64) * 8;
 ///
 /// `GetMwebUtxos::num_requested` is a `u16`, so an honest peer cannot answer with
 /// more entries than this no matter what was asked for.
+///
+/// This bounds what a peer may *send* us, and so is derived from the wire field.
+/// [`MAX_REQUESTED_MWEB_UTXOS`] bounds what we may *ask* for, and is smaller.
 pub const MAX_UTXOS_PER_BATCH: usize = u16::MAX as usize;
+
+/// Largest `num_requested` litecoind will honour in a `getmwebutxos`.
+///
+/// Core's `MAX_REQUESTED_MWEB_UTXOS` (`net_processing.cpp`). Asking for more is
+/// not merely wasted: litecoind **disconnects** the peer. Requests are clamped to
+/// this before they go on the wire.
+///
+/// Requesting the maximum matters more since 0.21.5.6, where serving is
+/// rate-limited per *request* rather than per UTXO, so a wider batch buys
+/// proportionally more data per token. A full 4096-entry batch is roughly 3.8 MB
+/// of `FULL` outputs, comfortably inside both Litecoin's 32 MB message limit and
+/// [`MAX_P2P_PAYLOAD`].
+pub const MAX_REQUESTED_MWEB_UTXOS: u16 = 4096;
 
 /// Largest number of segment `parent_hashes` accepted in one `mwebutxos` message.
 ///
@@ -87,6 +103,8 @@ const _: () = {
     assert!(MAX_LEAFSET_BYTES <= MAX_P2P_PAYLOAD);
     // `num_requested` is a `u16`, so an honest peer cannot exceed this.
     assert!(MAX_UTXOS_PER_BATCH == u16::MAX as usize);
+    // What we ask for must be something a peer is allowed to answer in full.
+    assert!(MAX_REQUESTED_MWEB_UTXOS as usize <= MAX_UTXOS_PER_BATCH);
     // At least 50x headroom over observed mainnet usage.
     assert!(MAX_OUTPUT_MMR_SIZE > OBSERVED_MAINNET_LEAVES * 50);
     assert!(MAX_LEAFSET_BYTES as u64 > (OBSERVED_MAINNET_LEAVES / 8) * 50);

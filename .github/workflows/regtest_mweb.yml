@@ -32,8 +32,8 @@ env:
   # Litecoin Core release providing MWEB. Bump deliberately: the tests assert on
   # consensus behaviour (HogEx commitment layout, peg-in maturity, the 675-byte
   # bulletproof), so a version change is a real change in what is being tested.
-  LITECOIN_VERSION: 0.21.5.5
-  LITECOIN_SHA256: 623410d4f2695a68aa71332ae0672fee19276f41c1c63a531f97e24a50edde14
+  LITECOIN_VERSION: 0.21.5.6
+  LITECOIN_SHA256: 3c0a217651a431ef446641669a0b74ce7dbcd9b9ed1a118fc830b8f6779ee83f
 
 jobs:
   regtest-mweb:
@@ -102,6 +102,7 @@ jobs:
                                     --test core_pegin_pegout_roundtrip \
                                     --test lip0006_sync \
                                     --test lip0006_p2p \
+                                    --test lip0006_throttle \
                                     --test mweb_anchoring \
                                     -- --test-threads=1 --nocapture
 

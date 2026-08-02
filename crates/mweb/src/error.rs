@@ -21,6 +21,20 @@ pub enum BanReason {
     /// The transport failed mid-conversation: timeout, closed socket, broken
     /// pipe, or another I/O failure attributable to the connection.
     Transport,
+    /// The peer refused to serve because it is rate-limiting us, not because
+    /// anything is wrong with it.
+    ///
+    /// Litecoin Core 0.21.5.6 rate-limits `getmwebleafset` / `getmwebutxos`
+    /// with a node-wide token bucket and *silently drops* over-limit requests
+    /// (`AllowMWEBServe`, commits `cb65fc5` / `f24dec1`). The bucket is shared
+    /// across every non-whitelisted light client, so a peer can throttle us
+    /// while being perfectly healthy and honest.
+    ///
+    /// Unlike the other reasons this is **not** banworthy — see
+    /// [`crate::mweb_sync::is_banworthy_peer_error`]. Banning here would take a
+    /// good node out of the pool for busy-ness, and in the common single-peer
+    /// deployment it would take out the only node the wallet has.
+    Throttled,
 }
 
 impl fmt::Display for BanReason {
@@ -29,6 +43,7 @@ impl fmt::Display for BanReason {
             Self::BadProof => write!(f, "bad proof"),
             Self::ProtocolViolation => write!(f, "protocol violation"),
             Self::Transport => write!(f, "transport failure"),
+            Self::Throttled => write!(f, "rate limited"),
         }
     }
 }
@@ -77,7 +92,16 @@ impl Error {
         Self::Peer(BanReason::Transport, msg.into())
     }
 
+    /// The peer is rate-limiting us. Peer-attributable but not banworthy.
+    pub fn throttled(msg: impl Into<String>) -> Self {
+        Self::Peer(BanReason::Throttled, msg.into())
+    }
+
     /// The typed ban classification, when this error is peer-attributable.
+    ///
+    /// Peer-attributable is not the same as banworthy: [`BanReason::Throttled`]
+    /// identifies the peer as the source without justifying a ban. Use
+    /// [`crate::mweb_sync::is_banworthy_peer_error`] for the ban decision.
     pub fn ban_reason(&self) -> Option<BanReason> {
         match self {
             Self::Peer(reason, _) => Some(*reason),

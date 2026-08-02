@@ -30,8 +30,14 @@ use crate::scan::{scan_utxo_entries_at, AddressBook};
 
 /// Default batch size for `getmwebutxos` (peer returns up to this many unspent UTXOs).
 ///
-/// [`crate::mweb_sync::MwebSyncer`] still halves and retries on rare PMMR verify failures.
-pub const DEFAULT_UTXO_BATCH: u16 = 500;
+/// Set to [`crate::limits::MAX_REQUESTED_MWEB_UTXOS`], the widest batch litecoind
+/// will answer. Since 0.21.5.6 the peer rate-limits serving per *request* rather
+/// than per UTXO, so request count is what a sync pays for: at mainnet scale this
+/// is roughly 86 requests instead of the ~700 a 500-wide batch needed.
+///
+/// [`crate::mweb_sync::MwebSyncer`] still halves and retries on rare PMMR verify
+/// failures, so a width that some segment cannot prove costs a retry, not a pass.
+pub const DEFAULT_UTXO_BATCH: u16 = crate::limits::MAX_REQUESTED_MWEB_UTXOS;
 
 /// How strictly to verify LIP-0006 payloads.
 ///

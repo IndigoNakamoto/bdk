@@ -9,6 +9,44 @@ reachable peer that serves LIP-0006 (`mwebheader`, `mwebleafset`, `getmwebutxos`
 - **Non-pruned** (archive) so historical `getmwebutxos` can be served during first sync
 - P2P listening (default mainnet `9333`)
 - Prefer advertising MWEB / light-client service bits so peers discover capability
+- **0.21.5.6+: whitelist your clients** — see below
+
+## Serving rate limit (Litecoin Core 0.21.5.6+)
+
+0.21.5.6 meters `getmwebleafset` and `getmwebutxos` through a token bucket
+(`AllowMWEBServe`): **32 request burst, refilling at 0.5/s**. Three properties
+matter for operations:
+
+- It is **node-wide**, not per-peer, and deliberately survives reconnects. Every
+  non-whitelisted light client pointed at the node shares one allowance.
+- Over-budget requests are **silently dropped** — no reject message, no
+  disconnect. From the client they look exactly like a dead peer.
+- Peers with `PF_NOBAN` are **exempt**.
+
+On a node you operate, whitelist the clients:
+
+```bash
+litecoind -whitelist=noban@127.0.0.1        # local wallet
+litecoind -whitelist=noban@10.0.0.0/8       # your own fleet
+```
+
+Without this a first sync is throttled to roughly one batch every two seconds no
+matter how well-behaved the client is, and it competes with every other wallet
+using the same node.
+
+`bdk_mweb` handles the limit rather than assuming it away: each window of
+requests is flushed with a `ping`, and since litecoind processes one peer's
+messages in order, anything missing when the `pong` arrives was dropped and is
+re-issued. Throttling therefore costs latency, never correctness, and a
+rate-limiting peer is **not** banned (`BanReason::Throttled`) — see
+[`lip0006_tcp.rs`](../crates/mweb/src/lip0006_tcp.rs). A peer that serves
+*nothing* across several rounds still fails the pass, with a message pointing at
+`-whitelist`.
+
+Batches are requested at Core's maximum `num_requested` of **4096**
+(`MAX_REQUESTED_MWEB_UTXOS`), because the bucket charges per request rather than
+per UTXO: a full mainnet sync is ~86 requests at that width instead of ~700 at
+500.
 
 ## Local developer peer
 

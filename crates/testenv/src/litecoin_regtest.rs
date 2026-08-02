@@ -483,6 +483,21 @@ pub struct LitecoinNodeEnv {
     litecoind: Child,
 }
 
+/// Whether the harness node exempts the test client from Core's peer DoS limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerPolicy {
+    /// `-whitelist=noban@127.0.0.1`, matching Core's own functional tests.
+    ///
+    /// Grants `PF_NOBAN`, which among other things exempts the client from the
+    /// node-wide MWEB serving rate limit added in 0.21.5.6 (`AllowMWEBServe`).
+    Whitelisted,
+    /// No whitelist, so the client is subject to every limit a real peer faces.
+    ///
+    /// Needed to reach the throttled code paths at all: under [`Self::Whitelisted`]
+    /// litecoind never drops a `getmwebutxos`, so a test cannot observe one.
+    RateLimited,
+}
+
 impl LitecoinNodeEnv {
     pub fn from_env() -> Result<Self> {
         let litecoind = std::env::var("LITECOIND_EXE")
@@ -491,8 +506,13 @@ impl LitecoinNodeEnv {
     }
 
     pub fn spawn(litecoind_exe: PathBuf) -> Result<Self> {
+        Self::spawn_with_policy(litecoind_exe, PeerPolicy::Whitelisted)
+    }
+
+    /// Spawn with an explicit [`PeerPolicy`]; see [`Self::spawn`] for the default.
+    pub fn spawn_with_policy(litecoind_exe: PathBuf, policy: PeerPolicy) -> Result<Self> {
         let (datadir, cookie_file, rpc, rpc_url, p2p_port, litecoind) =
-            spawn_litecoind(litecoind_exe)?;
+            spawn_litecoind(litecoind_exe, policy)?;
         Ok(Self {
             datadir,
             cookie_file,
@@ -574,7 +594,18 @@ impl Drop for LitecoinNodeEnv {
 /// path goes green while asserting nothing, and the whole node-backed suite
 /// stops protecting anything without a single red build to say so.
 pub fn try_node_from_env() -> Result<Option<LitecoinNodeEnv>> {
-    match LitecoinNodeEnv::from_env() {
+    try_node_from_env_with_policy(PeerPolicy::Whitelisted)
+}
+
+/// [`try_node_from_env`] with an explicit [`PeerPolicy`].
+///
+/// Use [`PeerPolicy::RateLimited`] for tests that need to see litecoind enforce a
+/// limit rather than exempt them from it.
+pub fn try_node_from_env_with_policy(policy: PeerPolicy) -> Result<Option<LitecoinNodeEnv>> {
+    let spawned = std::env::var("LITECOIND_EXE")
+        .map_err(|_| anyhow!("LITECOIND_EXE is not set; skipping Litecoin node harness"))
+        .and_then(|exe| LitecoinNodeEnv::spawn_with_policy(PathBuf::from(exe), policy));
+    match spawned {
         Ok(env) => Ok(Some(env)),
         Err(e) => {
             let msg = e.to_string();
@@ -615,6 +646,7 @@ pub struct LitecoinTestEnv {
 
 fn spawn_litecoind(
     litecoind_exe: PathBuf,
+    policy: PeerPolicy,
 ) -> Result<(PathBuf, PathBuf, RpcClient, String, u16, Child)> {
     if !litecoind_exe.exists() {
         bail!("litecoind not found at {}", litecoind_exe.display());
@@ -625,8 +657,8 @@ fn spawn_litecoind(
     let p2p_port = free_port()?;
     let cookie = datadir.join("regtest").join(".cookie");
 
-    let mut litecoind = Command::new(&litecoind_exe)
-        .arg("-regtest")
+    let mut cmd = Command::new(&litecoind_exe);
+    cmd.arg("-regtest")
         .arg(format!("-datadir={}", datadir.display()))
         .arg(format!("-port={p2p_port}"))
         .arg(format!("-rpcport={rpc_port}"))
@@ -634,9 +666,12 @@ fn spawn_litecoind(
         .arg("-txindex=1")
         .arg("-fallbackfee=0.0001")
         .arg("-acceptnonstdtxn=1")
-        .arg("-mempoolreplacement=1")
+        .arg("-mempoolreplacement=1");
+    if policy == PeerPolicy::Whitelisted {
         // Match Core functional tests: allow MWEB light-client getdata without bans.
-        .arg("-whitelist=noban@127.0.0.1")
+        cmd.arg("-whitelist=noban@127.0.0.1");
+    }
+    let mut litecoind = cmd
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -688,7 +723,7 @@ impl LitecoinTestEnv {
         }
 
         let (datadir, cookie, rpc, rpc_url, _p2p_port, mut litecoind) =
-            spawn_litecoind(litecoind_exe)?;
+            spawn_litecoind(litecoind_exe, PeerPolicy::Whitelisted)?;
         let electrum_port = free_port()?;
         let contents = fs::read_to_string(&cookie).context("read litecoind cookie")?;
         let (user, pass) = contents

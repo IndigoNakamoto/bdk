@@ -7,6 +7,7 @@
 // Every byte received here is peer-controlled; a reachable panic is a remote DoS.
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -36,6 +37,87 @@ use crate::tx_builder::kernel_id;
 /// bounded so a peer trickling filler messages cannot stall a sync indefinitely.
 const RECV_UNTIL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// Requests to put in flight per serve round.
+///
+/// Litecoin Core 0.21.5.6 rate-limits `getmwebleafset` / `getmwebutxos` with a
+/// node-wide token bucket (`AllowMWEBServe`): `MWEB_SERVE_MAX_TOKENS = 32`
+/// burst, `MWEB_SERVE_REFILL_PER_SECOND = 0.5`. Matching the burst means the
+/// first round of a sync is served in full on an idle node.
+///
+/// This is a pacing hint, not a correctness boundary. The bucket is shared
+/// across every non-whitelisted light client on the node, so the tokens
+/// actually available to us are unknowable from here; correctness comes from
+/// [`TcpMwebPeer::serve_round`] detecting what was dropped and re-issuing it.
+const MWEB_SERVE_BURST: usize = 32;
+
+/// How long to wait for the peer to accrue one serving token.
+///
+/// The reciprocal of Core's `MWEB_SERVE_REFILL_PER_SECOND = 0.5`. Also a hint:
+/// waiting too little costs a wasted round, waiting too much costs latency, and
+/// neither loses data.
+const THROTTLE_REFILL_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Rounds that may serve nothing at all before a sync gives up on the peer.
+///
+/// The re-issue loop only terminates because a round either makes progress or
+/// increments this counter (cf. F-05b): without the bound, a peer that accepts
+/// requests and answers none would spin forever.
+const MAX_CONSECUTIVE_THROTTLED_ROUNDS: u32 = 5;
+
+/// Split a served round into the responses we got and the requests that were dropped.
+///
+/// Over-limit requests are discarded by the node without any reply, so the only
+/// way to tell served from dropped is to match responses back to requests. Match
+/// on `start_index` rather than assuming the served set is a prefix of the round:
+/// the bucket refills while the node works through our messages, so a later
+/// request can be served after an earlier one was dropped.
+///
+/// `block_hash` is deliberately not checked here. A response carrying the right
+/// `start_index` for the wrong block still has to prove itself against the
+/// header's `output_root` in `verify_utxo_batch`, and duplicating that check with
+/// weaker information would only add a way to reject honest data.
+fn partition_round(
+    reqs: &[GetMwebUtxos],
+    responses: Vec<MwebUtxos>,
+) -> Result<(Vec<MwebUtxos>, Vec<GetMwebUtxos>), Error> {
+    let mut slots: Vec<Option<MwebUtxos>> = (0..reqs.len()).map(|_| None).collect();
+    let mut by_start: BTreeMap<u64, usize> = BTreeMap::new();
+    for (i, req) in reqs.iter().enumerate() {
+        // A schedule chunk starts at a distinct leaf, so a duplicate here would
+        // be our own bug; keep the first so matching stays deterministic.
+        by_start.entry(req.start_index).or_insert(i);
+    }
+
+    for resp in responses {
+        let Some(&i) = by_start.get(&resp.start_index) else {
+            return Err(Error::protocol(alloc::format!(
+                "mwebutxos for unrequested start_index {}",
+                resp.start_index
+            )));
+        };
+        if slots.get(i).map(Option::is_some).unwrap_or(false) {
+            return Err(Error::protocol(alloc::format!(
+                "duplicate mwebutxos for start_index {}",
+                resp.start_index
+            )));
+        }
+        if let Some(slot) = slots.get_mut(i) {
+            *slot = Some(resp);
+        }
+    }
+
+    let mut served = Vec::new();
+    let mut unserved = Vec::new();
+    for (i, slot) in slots.into_iter().enumerate() {
+        match (slot, reqs.get(i)) {
+            (Some(batch), _) => served.push(batch),
+            (None, Some(req)) => unserved.push(req.clone()),
+            (None, None) => {}
+        }
+    }
+    Ok((served, unserved))
+}
+
 /// Outcome of [`TcpMwebPeer::broadcast_tx`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BroadcastAck {
@@ -55,6 +137,12 @@ pub struct TcpMwebPeer {
     /// Peer address for reconnect (host:port form).
     addr: String,
     network: Network,
+    /// Requests to put in flight per serve round, shrunk when the peer throttles.
+    ///
+    /// Core's bucket is node-wide precisely so reconnecting cannot reset it
+    /// (`f24dec1`), so this survives [`TcpMwebPeer::reconnect`] too — dropping it
+    /// there would just relearn the same limit from scratch every reconnect.
+    serve_window: usize,
 }
 
 impl TcpMwebPeer {
@@ -98,6 +186,7 @@ impl TcpMwebPeer {
             magic,
             addr: addr_str,
             network,
+            serve_window: MWEB_SERVE_BURST,
         };
         peer.handshake()?;
         Ok(peer)
@@ -111,7 +200,8 @@ impl TcpMwebPeer {
             .map_err(|e| Error::Crypto(alloc::format!("resolve: {e}")))?
             .next()
             .ok_or_else(|| Error::Crypto("no address resolved".into()))?;
-        let fresh = Self::connect_sock(sock, self.addr.clone(), self.network)?;
+        let mut fresh = Self::connect_sock(sock, self.addr.clone(), self.network)?;
+        fresh.serve_window = self.serve_window;
         *self = fresh;
         Ok(())
     }
@@ -137,10 +227,7 @@ impl TcpMwebPeer {
         let inv = tx_inventory(tx)?;
         self.send(NetworkMessage::Tx(tx.clone()))?;
 
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0xB40A_DCA5);
+        let nonce = ping_nonce();
         self.send(NetworkMessage::Ping(nonce))?;
         self.wait_pong(nonce)?;
 
@@ -186,6 +273,84 @@ impl TcpMwebPeer {
             }
         }
         Err(Error::Crypto("p2p: no pong after tx broadcast".into()))
+    }
+
+    /// Send a `ping` and read until its `pong`, collecting every `want` payload seen.
+    ///
+    /// This is what turns a silent drop into an observable event. litecoind
+    /// processes one peer's messages strictly in order, so by the time it writes
+    /// the `pong` it has already decided the fate of every request queued ahead of
+    /// it. Whatever has not arrived was dropped, not delayed — no timeout needed,
+    /// and no ambiguity with a merely slow node.
+    fn collect_until_pong(
+        &mut self,
+        want: &str,
+        max_payloads: usize,
+    ) -> Result<Vec<Vec<u8>>, Error> {
+        let nonce = ping_nonce();
+        self.send(NetworkMessage::Ping(nonce))?;
+
+        // Budget for the payloads themselves plus unrelated traffic (addr, inv,
+        // feefilter, the peer's own pings) interleaved with them.
+        let budget = max_payloads.saturating_mul(2).saturating_add(64);
+        let deadline = std::time::Instant::now() + RECV_UNTIL_DEADLINE;
+        let mut out: Vec<Vec<u8>> = Vec::new();
+
+        for _ in 0..budget {
+            if std::time::Instant::now() >= deadline {
+                return Err(Error::transport(alloc::format!(
+                    "p2p: timed out collecting {want} (deadline exceeded)"
+                )));
+            }
+            let msg = self.recv()?;
+            let cmd = msg.command().to_string();
+            match msg.payload() {
+                NetworkMessage::Pong(n) if *n == nonce => return Ok(out),
+                NetworkMessage::Ping(n) => self.send(NetworkMessage::Pong(*n))?,
+                NetworkMessage::NotFound(inv) => {
+                    return Err(Error::protocol(alloc::format!(
+                        "p2p: notfound while collecting {want}: {inv:?}"
+                    )))
+                }
+                NetworkMessage::Unknown { command, payload }
+                    if command.as_ref() == want || cmd == want =>
+                {
+                    if out.len() >= max_payloads {
+                        return Err(Error::protocol(alloc::format!(
+                            "p2p: peer sent more than {max_payloads} {want} messages in one round"
+                        )));
+                    }
+                    out.push(payload.clone());
+                }
+                other => {
+                    let _ = other;
+                }
+            }
+        }
+        Err(Error::transport(alloc::format!(
+            "p2p: no pong while collecting {want} within {budget} messages"
+        )))
+    }
+
+    /// Issue one round of `getmwebutxos` and return only the batches actually served.
+    ///
+    /// A short return is normal, not an error: it means the peer's serving bucket
+    /// ran dry partway through. The caller re-issues what is missing.
+    fn serve_round(&mut self, reqs: &[GetMwebUtxos]) -> Result<Vec<MwebUtxos>, Error> {
+        for req in reqs {
+            let payload = serialize(req);
+            self.send_cmd("getmwebutxos", &payload)?;
+        }
+        let payloads = self.collect_until_pong("mwebutxos", reqs.len())?;
+        let mut out = Vec::with_capacity(payloads.len());
+        for payload in payloads {
+            let mut cursor = std::io::Cursor::new(payload);
+            out.push(
+                MwebUtxos::consensus_decode(&mut cursor)
+                    .map_err(|e| Error::protocol(alloc::format!("mwebutxos decode: {e}")))?,
+            );
+        }
+        Ok(out)
     }
 
     fn is_transient(err: &Error) -> bool {
@@ -377,6 +542,14 @@ impl TcpMwebPeer {
     }
 }
 
+/// Nonce for a flush `ping`, distinct enough to tell our pong from any other.
+fn ping_nonce() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0xB40A_DCA5)
+}
+
 /// Validate a P2P message header against `magic` and return its declared payload length.
 ///
 /// Split out from `TcpMwebPeer::recv` so the framing rules are testable and
@@ -494,6 +667,252 @@ mod frame_tests {
     }
 }
 
+/// Rate-limit handling: response matching and the re-issue loop.
+///
+/// The regtest harness whitelists its node (`-whitelist=noban@127.0.0.1`), which
+/// exempts it from `AllowMWEBServe` entirely, so a node-backed suite cannot reach
+/// these paths by default. These drive them directly instead — no socket, and no
+/// real waiting.
+#[cfg(test)]
+mod throttle_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::error::BanReason;
+    use crate::p2p::OUTPUT_FORMAT_FULL;
+    use bitcoin::hashes::Hash;
+
+    fn hash() -> BlockHash {
+        BlockHash::from_byte_array([0x42; 32])
+    }
+
+    fn req(start_index: u64) -> GetMwebUtxos {
+        GetMwebUtxos {
+            block_hash: hash(),
+            start_index,
+            num_requested: 4096,
+            output_format: OUTPUT_FORMAT_FULL,
+        }
+    }
+
+    fn resp(start_index: u64) -> MwebUtxos {
+        MwebUtxos {
+            block_hash: hash(),
+            start_index,
+            output_format: OUTPUT_FORMAT_FULL,
+            utxos: Vec::new(),
+            parent_hashes: Vec::new(),
+        }
+    }
+
+    fn schedule(n: u64) -> Vec<GetMwebUtxos> {
+        (0..n).map(req).collect()
+    }
+
+    #[test]
+    fn partition_round_takes_every_response_when_nothing_is_dropped() {
+        let reqs = schedule(4);
+        let responses = vec![resp(0), resp(1), resp(2), resp(3)];
+        let (served, unserved) = partition_round(&reqs, responses).unwrap();
+        assert_eq!(
+            served.iter().map(|b| b.start_index).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+        assert!(unserved.is_empty());
+    }
+
+    /// The bucket refills while the node works through a window, so a later request
+    /// can be served after an earlier one was dropped. Matching must not assume the
+    /// served set is a prefix.
+    #[test]
+    fn partition_round_handles_non_contiguous_drops() {
+        let reqs = schedule(5);
+        // Deliberately out of order as well, to pin that ordering comes from the
+        // schedule rather than from arrival.
+        let responses = vec![resp(3), resp(0)];
+        let (served, unserved) = partition_round(&reqs, responses).unwrap();
+        assert_eq!(
+            served.iter().map(|b| b.start_index).collect::<Vec<_>>(),
+            vec![0, 3]
+        );
+        assert_eq!(
+            unserved.iter().map(|r| r.start_index).collect::<Vec<_>>(),
+            vec![1, 2, 4]
+        );
+    }
+
+    #[test]
+    fn partition_round_rejects_a_response_we_did_not_ask_for() {
+        let reqs = schedule(3);
+        let err = partition_round(&reqs, vec![resp(99)]).unwrap_err();
+        assert_eq!(err.ban_reason(), Some(BanReason::ProtocolViolation));
+        assert!(alloc::format!("{err}").contains("unrequested start_index 99"));
+    }
+
+    #[test]
+    fn partition_round_rejects_a_duplicated_response() {
+        let reqs = schedule(3);
+        let err = partition_round(&reqs, vec![resp(1), resp(1)]).unwrap_err();
+        assert_eq!(err.ban_reason(), Some(BanReason::ProtocolViolation));
+        assert!(alloc::format!("{err}").contains("duplicate"));
+    }
+
+    /// A peer that drops nothing — a whitelisted node, or any node before
+    /// 0.21.5.6 — must be driven at full width with no waiting at all.
+    #[test]
+    fn unthrottled_peer_is_served_in_one_round_without_waiting() {
+        let reqs = schedule(20);
+        let mut window = MWEB_SERVE_BURST;
+        let mut rounds = 0usize;
+        let mut delivered = Vec::new();
+        let mut sleeps: Vec<std::time::Duration> = Vec::new();
+
+        drive_serve_rounds(
+            &reqs,
+            &mut window,
+            |round| {
+                rounds += 1;
+                Ok(round.iter().map(|r| resp(r.start_index)).collect())
+            },
+            &mut |batch| {
+                delivered.push(batch.start_index);
+                Ok(())
+            },
+            |d| sleeps.push(d),
+        )
+        .unwrap();
+
+        assert_eq!(rounds, 1, "a peer serving everything needs one round");
+        assert_eq!(delivered, (0..20).collect::<Vec<_>>());
+        assert!(sleeps.is_empty(), "no throttle means no waiting");
+    }
+
+    /// The headline case: a node-wide bucket with a burst and a slow refill. Every
+    /// batch must arrive exactly once and in order, with dropped requests re-issued
+    /// rather than lost.
+    #[test]
+    fn throttled_peer_is_fully_downloaded_by_re_issuing_dropped_requests() {
+        let reqs = schedule(86); // ~mainnet at a 4096-wide batch
+        let mut window = MWEB_SERVE_BURST;
+        let mut tokens = MWEB_SERVE_BURST;
+        let mut delivered = Vec::new();
+        let mut sleeps: Vec<std::time::Duration> = Vec::new();
+
+        drive_serve_rounds(
+            &reqs,
+            &mut window,
+            |round| {
+                // Serve while tokens last, silently drop the rest, then refill by
+                // one so the next round can make progress.
+                let served: Vec<MwebUtxos> = round
+                    .iter()
+                    .take(tokens)
+                    .map(|r| resp(r.start_index))
+                    .collect();
+                tokens = tokens.saturating_sub(served.len()) + 1;
+                Ok(served)
+            },
+            &mut |batch| {
+                delivered.push(batch.start_index);
+                Ok(())
+            },
+            |d| sleeps.push(d),
+        )
+        .unwrap();
+
+        assert_eq!(
+            delivered,
+            (0..86).collect::<Vec<_>>(),
+            "every request must be delivered exactly once, in schedule order"
+        );
+        assert!(!sleeps.is_empty(), "a throttled sync must pace itself");
+    }
+
+    #[test]
+    fn peer_that_serves_nothing_gives_up_instead_of_spinning() {
+        let reqs = schedule(10);
+        let mut window = MWEB_SERVE_BURST;
+        let mut rounds = 0usize;
+        let mut delivered = Vec::new();
+        let mut sleeps: Vec<std::time::Duration> = Vec::new();
+
+        let err = drive_serve_rounds(
+            &reqs,
+            &mut window,
+            |_round| {
+                rounds += 1;
+                Ok(Vec::new())
+            },
+            &mut |batch| {
+                delivered.push(batch.start_index);
+                Ok(())
+            },
+            |d| sleeps.push(d),
+        )
+        .unwrap_err();
+
+        assert_eq!(rounds as u32, MAX_CONSECUTIVE_THROTTLED_ROUNDS);
+        assert!(delivered.is_empty());
+        assert_eq!(err.ban_reason(), Some(BanReason::Throttled));
+        // The operator's likeliest fix has to be in the message they will see.
+        assert!(alloc::format!("{err}").contains("-whitelist"));
+    }
+
+    /// The window follows what the peer actually supplies: narrow while it is
+    /// throttling, wide again once it is not, and never past Core's burst.
+    #[test]
+    fn window_tracks_the_peers_observed_allowance() {
+        let reqs = schedule(12);
+        let mut window = MWEB_SERVE_BURST;
+        let mut widths = Vec::new();
+        let mut round = 0usize;
+        let mut delivered = Vec::new();
+
+        drive_serve_rounds(
+            &reqs,
+            &mut window,
+            |batch| {
+                widths.push(batch.len());
+                round += 1;
+                // Throttle hard for two rounds, then serve freely.
+                let allowance = if round <= 2 { 2 } else { batch.len() };
+                Ok(batch
+                    .iter()
+                    .take(allowance)
+                    .map(|r| resp(r.start_index))
+                    .collect())
+            },
+            &mut |b| {
+                delivered.push(b.start_index);
+                Ok(())
+            },
+            |_| {},
+        )
+        .unwrap();
+
+        assert_eq!(delivered, (0..12).collect::<Vec<_>>());
+        assert_eq!(widths.first().copied(), Some(12), "starts at full burst");
+        assert_eq!(
+            widths.get(1).copied(),
+            Some(2),
+            "narrows to what the peer served"
+        );
+        assert!(
+            window <= MWEB_SERVE_BURST,
+            "window must never exceed Core's burst, got {window}"
+        );
+    }
+
+    /// A throttle is peer-attributable but must not evict the peer: banning a node
+    /// for being busy would, in a single-peer deployment, ban the only node there is.
+    #[test]
+    fn throttle_is_attributable_but_not_banworthy() {
+        let err = throttled_error(7);
+        assert_eq!(err.ban_reason(), Some(BanReason::Throttled));
+        assert!(!crate::mweb_sync::is_banworthy_peer_error(&err));
+    }
+}
+
 #[cfg(test)]
 mod broadcast_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -608,51 +1027,73 @@ impl MwebUtxoSource for TcpMwebPeer {
         })
     }
 
+    /// Fetch the leafset, retrying if the peer's serving budget dropped the request.
+    ///
+    /// `getmwebleafset` goes through the same `AllowMWEBServe` bucket as
+    /// `getmwebutxos`, so it can be silently discarded too. There is only one of
+    /// these per pass and it gates everything after it, so a drop here would stall
+    /// the whole sync on a read timeout.
     fn get_leafset(&mut self, block_hash: BlockHash) -> Result<MwebLeafset, Error> {
         self.with_reconnect(|this| {
-            let inv: Vec<Inventory> = vec![mweb_inv(MSG_MWEB_LEAFSET, block_hash)];
-            this.send(NetworkMessage::GetData(inv))?;
-            let payload = this.recv_until_cmd("mwebleafset")?;
-            let mut cursor = std::io::Cursor::new(payload);
-            MwebLeafset::consensus_decode(&mut cursor)
-                .map_err(|e| Error::protocol(alloc::format!("mwebleafset decode: {e}")))
+            for _ in 0..MAX_CONSECUTIVE_THROTTLED_ROUNDS {
+                let inv: Vec<Inventory> = vec![mweb_inv(MSG_MWEB_LEAFSET, block_hash)];
+                this.send(NetworkMessage::GetData(inv))?;
+                let mut payloads = this.collect_until_pong("mwebleafset", 1)?;
+                if let Some(payload) = payloads.pop() {
+                    let mut cursor = std::io::Cursor::new(payload);
+                    return MwebLeafset::consensus_decode(&mut cursor)
+                        .map_err(|e| Error::protocol(alloc::format!("mwebleafset decode: {e}")));
+                }
+                std::thread::sleep(THROTTLE_REFILL_WAIT);
+            }
+            Err(Error::throttled(alloc::format!(
+                "peer dropped {MAX_CONSECUTIVE_THROTTLED_ROUNDS} getmwebleafset requests; \
+                 litecoind 0.21.5.6+ rate-limits MWEB serving node-wide, so run the node with \
+                 `-whitelist=noban@<client>` or use a less contended peer"
+            )))
         })
     }
 
     fn get_utxos(&mut self, req: GetMwebUtxos) -> Result<MwebUtxos, Error> {
         self.with_reconnect(|this| {
-            let payload = serialize(&req);
-            this.send_cmd("getmwebutxos", &payload)?;
-            let resp = this.recv_until_cmd("mwebutxos")?;
-            let mut cursor = std::io::Cursor::new(resp);
-            MwebUtxos::consensus_decode(&mut cursor)
-                .map_err(|e| Error::protocol(alloc::format!("mwebutxos decode: {e}")))
+            let round = [req.clone()];
+            for _ in 0..MAX_CONSECUTIVE_THROTTLED_ROUNDS {
+                let responses = this.serve_round(&round)?;
+                let (mut served, _) = partition_round(&round, responses)?;
+                if let Some(batch) = served.pop() {
+                    return Ok(batch);
+                }
+                std::thread::sleep(THROTTLE_REFILL_WAIT);
+            }
+            Err(throttled_error(1))
         })
     }
 
-    /// True pipelining: write every `getmwebutxos` request upfront, then stream the
-    /// responses. litecoind processes a peer's messages in order, so while we verify
-    /// and scan batch `k` it is already building batch `k + 1`.
+    /// Pipelined download that survives the peer's serving rate limit.
+    ///
+    /// litecoind processes a peer's messages in order, so a window of requests in
+    /// flight lets it build batch `k + 1` while we verify and scan batch `k`. Since
+    /// 0.21.5.6 it also silently drops requests over its serving budget, so each
+    /// window is flushed with a `ping`: whatever has not arrived by the `pong` was
+    /// dropped and is re-issued in the next round. The window then tracks what the
+    /// peer actually served, which converges on its real allowance without us
+    /// having to guess it — and stays wide open on a whitelisted or pre-0.21.5.6
+    /// node, where nothing is ever dropped.
     fn get_utxos_pipelined(
         &mut self,
         reqs: &[GetMwebUtxos],
         on_batch: &mut dyn FnMut(MwebUtxos) -> Result<(), Error>,
     ) -> Result<(), Error> {
-        let mut run = |this: &mut Self| -> Result<(), Error> {
-            for req in reqs {
-                let payload = serialize(req);
-                this.send_cmd("getmwebutxos", &payload)?;
-            }
-            for _ in reqs {
-                let resp = this.recv_until_cmd("mwebutxos")?;
-                let mut cursor = std::io::Cursor::new(resp);
-                let batch = MwebUtxos::consensus_decode(&mut cursor)
-                    .map_err(|e| Error::protocol(alloc::format!("mwebutxos decode: {e}")))?;
-                on_batch(batch)?;
-            }
-            Ok(())
-        };
-        match run(self) {
+        let mut window = self.serve_window;
+        let outcome = drive_serve_rounds(
+            reqs,
+            &mut window,
+            |round| self.serve_round(round),
+            on_batch,
+            std::thread::sleep,
+        );
+        self.serve_window = window;
+        match outcome {
             Ok(()) => Ok(()),
             Err(e) => {
                 // Responses for requests we never read may still be queued on the
@@ -662,4 +1103,90 @@ impl MwebUtxoSource for TcpMwebPeer {
             }
         }
     }
+}
+
+/// The re-issue loop, with the socket and the clock factored out.
+///
+/// Split from [`TcpMwebPeer::get_utxos_pipelined`] so the window and stall
+/// accounting can be tested against a peer that drops whatever a test wants it
+/// to, without a socket and without spending the wall-clock time (cf. the same
+/// treatment given to `parse_frame`).
+///
+/// Termination: every iteration either delivers at least one batch or increments
+/// `stalled_rounds`, which is capped, so the loop cannot spin against a peer that
+/// accepts requests and answers none.
+fn drive_serve_rounds<R, W>(
+    reqs: &[GetMwebUtxos],
+    window: &mut usize,
+    mut round_fn: R,
+    on_batch: &mut dyn FnMut(MwebUtxos) -> Result<(), Error>,
+    mut wait: W,
+) -> Result<(), Error>
+where
+    R: FnMut(&[GetMwebUtxos]) -> Result<Vec<MwebUtxos>, Error>,
+    W: FnMut(std::time::Duration),
+{
+    let mut pending: Vec<GetMwebUtxos> = reqs.to_vec();
+    let mut stalled_rounds = 0u32;
+
+    while !pending.is_empty() {
+        let width = (*window).clamp(1, MWEB_SERVE_BURST).min(pending.len());
+        let round: Vec<GetMwebUtxos> = pending.iter().take(width).cloned().collect();
+        let rest: Vec<GetMwebUtxos> = pending.iter().skip(width).cloned().collect();
+
+        let responses = round_fn(&round)?;
+        let (served, unserved) = partition_round(&round, responses)?;
+        let served_count = served.len();
+        for batch in served {
+            on_batch(batch)?;
+        }
+
+        if unserved.is_empty() {
+            stalled_rounds = 0;
+            // Widen again after a clean round: a throttle early in a sync should
+            // not pin the rest of it narrow.
+            *window = (*window).saturating_mul(2).clamp(1, MWEB_SERVE_BURST);
+            pending = rest;
+            continue;
+        }
+
+        if served_count == 0 {
+            stalled_rounds += 1;
+            if stalled_rounds >= MAX_CONSECUTIVE_THROTTLED_ROUNDS {
+                return Err(throttled_error(unserved.len()));
+            }
+        } else {
+            stalled_rounds = 0;
+        }
+
+        // Ask next time for what the peer proved it can supply, and give the bucket
+        // long enough to refill that many tokens before asking again.
+        *window = served_count.max(1);
+        let mut next = unserved;
+        next.extend(rest);
+        pending = next;
+
+        #[cfg(feature = "std")]
+        eprintln!(
+            "  peer is rate-limiting mweb serving ({served_count}/{width} served); \
+             {} request(s) to re-issue with window {window}",
+            pending.len()
+        );
+        wait(THROTTLE_REFILL_WAIT * (*window) as u32);
+    }
+    Ok(())
+}
+
+/// Error for a peer that accepted our requests and served none of them.
+///
+/// Worded to point at the fix, because the usual cause is not an attack: the
+/// operator's own archive node is missing `-whitelist`, and the node-wide bucket
+/// is being shared with every other light client pointed at it.
+fn throttled_error(outstanding: usize) -> Error {
+    Error::throttled(alloc::format!(
+        "peer served none of {outstanding} outstanding getmwebutxos request(s) across \
+         {MAX_CONSECUTIVE_THROTTLED_ROUNDS} rounds; litecoind 0.21.5.6+ rate-limits MWEB \
+         serving node-wide, so run the node with `-whitelist=noban@<client>` or use a \
+         less contended peer"
+    ))
 }

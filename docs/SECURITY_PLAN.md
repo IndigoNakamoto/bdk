@@ -19,6 +19,7 @@ Review date: 2026-08-01. Reviewed at ~9k LoC across `src/` and `tests/`.
 - [Priority 6 — supply chain and CI](#priority-6--supply-chain-and-ci)
 - [Fuzzing plan](#fuzzing-plan)
 - [Public API compatibility matrix](#public-api-compatibility-matrix)
+- [F-21: silence read as death](#f-21-silence-read-as-death-medium)
 - [Suggested sequencing](#suggested-sequencing)
 
 ---
@@ -63,6 +64,7 @@ crates.
 | F-18 | Low | `mweb_sync.rs:216` | `is_banworthy_peer_error` matches on error message substrings; wording is load-bearing |
 | F-19 | Low | `coin_db.rs`, `changeset.rs` | `PartialEq` derived over secret fields; no constant-time comparison anywhere |
 | F-20 | Info | CI / deps | No fuzzing, no `cargo deny`, floating action tags, Dependabot does not cover Cargo |
+| F-21 | Medium | `lip0006_tcp.rs`, `mweb_sync.rs` | A silently dropped response was indistinguishable from a dead peer, so an upstream DoS fix made the client ban healthy nodes |
 
 ---
 
@@ -830,6 +832,8 @@ The wallet must be updated and re-pinned for anything marked "breaks".
 | `MwebCoin` | struct literal in wallet tests | F-08d/F-08g change `Drop` and `Debug`, not fields. Literal construction still compiles |
 | `leafset_has_leaf` | `mweb.rs:475` | Unchanged |
 | `MWEB_PEGIN_MATURITY`, `CHANGE_ADDRESS_INDEX` | `mweb.rs:399`, `:1037` | Unchanged |
+| `BanReason` | not matched by the wallet | F-21d adds a `Throttled` variant. The enum is `#[non_exhaustive]`, so additive |
+| `DEFAULT_UTXO_BATCH` | not set directly | F-21f raises it 500 → 4096. Value change, not an API break |
 
 - [x] **F-API1** F-18: `is_banworthy_peer_error` (`mweb_sync.rs:216`) classifies
       peers by matching substrings in error text. Every new error message added
@@ -843,6 +847,103 @@ The wallet must be updated and re-pinned for anything marked "breaks".
       wording is load-bearing. `banworthy_classification_is_typed` and
       `crate_constructed_peer_errors_classify_banworthy` in `mweb_sync.rs`
       pin the behavior.
+
+---
+
+## F-21: silence read as death (Medium)
+
+*Added 2026-08-02, after Litecoin Core v0.21.5.6.*
+
+That release added `AllowMWEBServe` (`cb65fc5`, `f24dec1`): a node-wide token
+bucket in front of `getmwebleafset` and `getmwebutxos`, 32 burst refilling at
+0.5/s, shared across every non-whitelisted light client, which **silently
+discards** over-budget requests. It is the server-side counterpart of the
+resource-exhaustion class this document addressed on the client side (F-02,
+F-03, F-04, F-06) — a good fix, and one that broke us.
+
+The defect it exposed is ours, and it is not really about rate limiting. Our
+error vocabulary had no way to say *"the peer is fine, it just isn't answering
+right now."* Every silence resolved to the socket read timeout, which produced
+`Error::transport`, which `is_banworthy_peer_error` treated as grounds to ban.
+So a correctness-preserving upstream change turned directly into the client
+evicting healthy nodes — and in the common single-peer deployment
+(`LITECOIN_P2P=127.0.0.1:9333`), evicting the only node it had. The pipelined
+path made it worse: `get_utxos_pipelined` wrote the whole schedule upfront and
+then insisted on reading exactly that many responses, so a full mainnet sync
+sent ~700 requests, had ~668 discarded, and blocked for 180 seconds.
+
+The general lesson is worth keeping separate from the fix: **absence of a
+response is not evidence about the peer** unless you have arranged for it to be.
+We had that arrangement available and were not using it outside `broadcast_tx` —
+litecoind processes one peer's messages strictly in order, so a `ping` after a
+batch of requests converts silence into an observation.
+
+- [x] **F-21a** Flush each window of `getmwebutxos` with a `ping` and treat any
+      response missing when the `pong` arrives as dropped. No timeout, no
+      ambiguity with a slow node, and no cost on a whitelisted or pre-0.21.5.6
+      peer where nothing is ever dropped. `TcpMwebPeer::serve_round`.
+- [x] **F-21b** Match responses to requests by `start_index` rather than
+      assuming the served set is a prefix of the window: the bucket refills
+      while the node works through our messages, so drops are not contiguous.
+      `partition_round`, with an unrequested or duplicated `start_index`
+      classified as a protocol violation.
+- [x] **F-21c** Re-issue what was dropped, tracking the window to what the peer
+      actually served. Terminate on the F-05b pattern — every round either
+      delivers a batch or increments a capped stall counter, so a peer that
+      accepts requests and answers none cannot spin the client.
+- [x] **F-21d** Add `BanReason::Throttled`, peer-attributable but **not**
+      banworthy, and give `PeerPool::with_failover` a rotate-without-ban branch.
+      The error text names `-whitelist`, because the usual cause is an
+      operator's own node missing it rather than an attack.
+- [x] **F-21e** Apply the same flush to `get_leafset` (also metered) and carry
+      the pacing window across `TcpMwebPeer::reconnect` — Core made its bucket
+      survive reconnects specifically so clients cannot reset it, so discarding
+      ours would just relearn the same limit every time.
+- [x] **F-21f** Raise `DEFAULT_UTXO_BATCH` to `MAX_REQUESTED_MWEB_UTXOS` (4096,
+      Core's cap). The bucket charges per *request*, not per UTXO, so batch
+      width is the cheapest available mitigation: ~86 requests for a mainnet
+      sync instead of ~700. `MwebSyncer::effective_batch_size` clamps the public
+      field, since litecoind rejects anything wider outright.
+- [x] **F-21g** Test the loop, not just the peer. The regtest harness passes
+      `-whitelist=noban@127.0.0.1`, which exempts it from the limit entirely, so
+      the node-backed suite could never have caught this. `drive_serve_rounds`
+      is split from the socket and the clock so the window and stall accounting
+      are unit-testable (the treatment `parse_frame` got in F-04b), and
+      `tests/lip0006_throttle.rs` spawns a node with `PeerPolicy::RateLimited`
+      to prove a real drained bucket still completes a sync.
+- [ ] **F-21h** Follow-up, wallet side: `ltc-wallet-mac` should surface
+      `BanReason::Throttled` distinctly in its sync UI. "Peer is rate-limiting,
+      this will take a few minutes" and "peer is broken" deserve different
+      words in front of a user.
+
+### Verified against Core v0.21.5.6 source
+
+Read from `src/net_processing.cpp` and `src/net.h` at tag `v0.21.5.6` rather
+than inferred from the release notes:
+
+| Claim | Source | Result |
+| --- | --- | --- |
+| Bucket is 32 tokens, 0.5/s | `MWEB_SERVE_MAX_TOKENS`, `MWEB_SERVE_REFILL_PER_SECOND` | Confirmed |
+| Node-wide, survives reconnect | `static double node_tokens` outside `CNodeState` | Confirmed |
+| `PF_NOBAN` exempt | first branch of `AllowMWEBServe` | Confirmed |
+| Over-limit is silent | bare `return`, no reject and no disconnect | Confirmed |
+| Meters leafset **and** UTXOs | called from both `ProcessGetMWEBLeafset` and `ProcessGetMWEBUTXOs` | Confirmed |
+| `get_header` unmetered | `ProcessGetMWEBHeader` does not call it | Confirmed — F-01 cross-check is unaffected |
+| `num_requested` cap is 4096 | `MAX_REQUESTED_MWEB_UTXOS` | Confirmed, and exceeding it **disconnects**, so F-21f's clamp is required, not an optimization |
+| A 4096 batch fits in a message | `MAX_PROTOCOL_MESSAGE_LENGTH` is **32 MB** in `net.h` | Confirmed with room to spare (~3.8 MB) |
+
+That last row corrected a pre-existing error in `limits.rs`, which cited Core's
+limit as 4 MB. That is *Bitcoin* Core's value; Litecoin raised it eightfold for
+MWEB. Nothing depended on the wrong number — `MAX_LEAFSET_BYTES` is tighter than
+either — but the comment presented a policy choice as a derived bound.
+
+**Not yet verified:** wall-clock timings for a full mainnet sync at 4096, whitelisted
+and not. Litecoin ships no macOS `litecoind` for 0.21.5.6 (the DMG carries only
+Litecoin-Qt), so this needs the Linux binary — the regtest suite in CI, or a
+Linux host. The local mainnet node additionally refuses every `getmwebutxos`
+with "Could not build segment" (`segment.leaves.empty()` → disconnect); that
+reproduces identically on unmodified `HEAD`, so it is a property of that node
+rather than of this change.
 
 ---
 

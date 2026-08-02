@@ -18,7 +18,7 @@ use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::All;
 
 use crate::coin_db::MwebCoinDatabase;
-use crate::error::Error;
+use crate::error::{BanReason, Error};
 use crate::keys::MasterKeys;
 use crate::lip0006::{
     check_batch_advances, verify_parent_hashes_present, MwebUtxoSource, SyncResult, VerifyMode,
@@ -224,8 +224,17 @@ impl SyncNotifier for ReadyNotifier {
 /// implementations should build their peer-caused failures with
 /// [`Error::bad_proof`] / [`Error::protocol`] / [`Error::transport`] so rotation
 /// keeps working for them too.
+///
+/// [`BanReason::Throttled`] is the one peer-attributable reason that is *not*
+/// banworthy: a node rate-limiting `getmwebutxos` is doing its job, and banning
+/// it for 300s would evict a healthy peer — or, in a single-peer deployment, the
+/// only one there is. Rotate to spread load instead; see
+/// [`PeerPool::with_failover`].
 pub fn is_banworthy_peer_error(err: &Error) -> bool {
-    err.ban_reason().is_some()
+    match err.ban_reason() {
+        Some(BanReason::Throttled) | None => false,
+        Some(_) => true,
+    }
 }
 
 /// Tip notifier that polls a height callback until the tip advances (mobile tip-loop idle).
@@ -547,6 +556,12 @@ impl PeerPool {
 
     /// Run `f` against a connected peer, ban+rotate on [`is_banworthy_peer_error`].
     ///
+    /// A [`BanReason::Throttled`] failure rotates *without* banning: the peer is
+    /// healthy and simply rate-limiting, so trying the next address spreads load
+    /// while leaving this one available. With a single configured peer there is
+    /// nowhere to rotate to, and the throttle error surfaces to the caller with
+    /// its `-whitelist` hint intact instead of being replaced by a ban.
+    ///
     /// Prefer this when the closure needs mid-pass state (e.g. checkpoint callbacks) that
     /// cannot be expressed through [`MwebSyncer::run_once_with_pool`].
     pub fn with_failover<R, F>(&mut self, network: bitcoin::Network, mut f: F) -> Result<R, Error>
@@ -566,6 +581,16 @@ impl PeerPool {
             match f(&mut peer) {
                 Ok(r) => return Ok(r),
                 Err(e) => {
+                    let throttled = e.ban_reason() == Some(BanReason::Throttled);
+                    if throttled {
+                        eprintln!(
+                            "warn: peer rate-limited on attempt {}/{} ({e}); rotating without ban",
+                            attempt + 1,
+                            attempts
+                        );
+                        last_err = Some(e);
+                        continue;
+                    }
                     if is_banworthy_peer_error(&e) {
                         self.ban_last_connected();
                         eprintln!(
@@ -590,6 +615,10 @@ pub struct MwebSyncer {
     /// Verification mode for tip header / leafset / UTXO batches.
     pub verify: VerifyMode,
     /// UTXO batch size for `getmwebutxos`.
+    ///
+    /// Clamped to `[1, MAX_REQUESTED_MWEB_UTXOS]` before use — litecoind refuses a
+    /// wider request outright, so a larger value here would stall a sync rather
+    /// than speed it up. See [`MwebSyncer::effective_batch_size`].
     pub batch_size: u16,
     /// Fine stratified window size (ignored when [`DatingMode::TipOnly`]).
     pub fine_window: u32,
@@ -655,6 +684,17 @@ impl MwebSyncer {
     /// Construct with defaults ([`VerifyMode::default`], fine window [`FINE_WINDOW`]).
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// [`Self::batch_size`] clamped to what litecoind will actually answer.
+    ///
+    /// `batch_size` is a public field, so a caller can set anything a `u16` holds.
+    /// Core caps `num_requested` at [`crate::limits::MAX_REQUESTED_MWEB_UTXOS`] and
+    /// rejects wider requests, and a zero-wide request can never advance the leaf
+    /// cursor, so both ends are clamped rather than trusted.
+    pub fn effective_batch_size(&self) -> u16 {
+        self.batch_size
+            .clamp(1, crate::limits::MAX_REQUESTED_MWEB_UTXOS)
     }
 
     /// Fast first-sync preset: tip-only dating (no 500-header storm).
@@ -846,7 +886,7 @@ impl MwebSyncer {
             }
         }
         let remaining = indices.len().saturating_sub(idx_i);
-        let batch_size = self.batch_size.max(1) as usize;
+        let batch_size = self.effective_batch_size() as usize;
         let approx_batches = remaining.div_ceil(batch_size).max(1);
         let idx_start = idx_i;
         let publish_progress = |consumed: usize| {
@@ -874,7 +914,7 @@ impl MwebSyncer {
         let height_map = state.height_map.clone();
         let mut batch_i = 0usize;
         // Prefer large requests; some wide PMMR segments fail verify — then halve.
-        let mut req_size = self.batch_size.max(1);
+        let mut req_size = self.effective_batch_size();
 
         // Fast path for full syncs (empty prior leafset): every unspent leaf is in
         // `added`, so the request schedule is deterministic upfront — batch k starts
@@ -1063,8 +1103,9 @@ impl MwebSyncer {
             publish_progress(idx_i - idx_start);
 
             // After a successful verify, gradually restore larger batches.
-            if req_size < self.batch_size {
-                req_size = (req_size.saturating_mul(2)).min(self.batch_size).max(1);
+            let ceiling = self.effective_batch_size();
+            if req_size < ceiling {
+                req_size = (req_size.saturating_mul(2)).min(ceiling).max(1);
             }
 
             let done = idx_i >= indices.len();
@@ -1255,6 +1296,15 @@ mod tests {
             "expected FULL_UTXO format"
         )));
         assert!(!is_banworthy_peer_error(&Error::InsufficientFunds));
+        // Throttling is peer-attributable but not the peer's fault: a node
+        // rate-limiting `getmwebutxos` is healthy, and banning it would evict a
+        // good peer (or, with one configured peer, the only one).
+        let throttled = Error::throttled("rate limited");
+        assert_eq!(
+            throttled.ban_reason(),
+            Some(crate::error::BanReason::Throttled)
+        );
+        assert!(!is_banworthy_peer_error(&throttled));
         // Wording must NOT be load-bearing: a Crypto error whose message merely
         // resembles a peer failure stays non-banworthy...
         assert!(!is_banworthy_peer_error(&Error::Crypto(
