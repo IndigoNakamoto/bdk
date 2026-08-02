@@ -912,10 +912,14 @@ batch of requests converts silence into an observation.
       are unit-testable (the treatment `parse_frame` got in F-04b), and
       `tests/lip0006_throttle.rs` spawns a node with `PeerPolicy::RateLimited`
       to prove a real drained bucket still completes a sync.
-- [ ] **F-21h** Follow-up, wallet side: `ltc-wallet-mac` should surface
-      `BanReason::Throttled` distinctly in its sync UI. "Peer is rate-limiting,
-      this will take a few minutes" and "peer is broken" deserve different
-      words in front of a user.
+- [x] **F-21h** Wallet side: `ltc-wallet-mac` surfaces `BanReason::Throttled`
+      distinctly. "Peer is rate-limiting" and "peer is broken" deserve
+      different words in front of a user, but the sharper half is behavioural —
+      it used to answer a throttle on the user's *own* node by falling back to
+      DNS-discovered public peers, which share the same node-wide limit and
+      would see queries their node keeps private. `sync_pass` now returns the
+      typed error and a pure `classify_pass_failure` decides both the wording
+      and whether the fallback fires; only a throttle suppresses it.
 
 ### Verified against Core v0.21.5.6 source
 
@@ -938,13 +942,36 @@ limit as 4 MB. That is *Bitcoin* Core's value; Litecoin raised it eightfold for
 MWEB. Nothing depended on the wrong number — `MAX_LEAFSET_BYTES` is tighter than
 either — but the comment presented a policy choice as a derived bound.
 
-**Not yet verified:** wall-clock timings for a full mainnet sync at 4096, whitelisted
-and not. Litecoin ships no macOS `litecoind` for 0.21.5.6 (the DMG carries only
-Litecoin-Qt), so this needs the Linux binary — the regtest suite in CI, or a
-Linux host. The local mainnet node additionally refuses every `getmwebutxos`
-with "Could not build segment" (`segment.leaves.empty()` → disconnect); that
-reproduces identically on unmodified `HEAD`, so it is a property of that node
-rather than of this change.
+### Measured on mainnet at width 4096
+
+F-21f was the one change reaching users with no mainnet evidence behind it, so
+it got a real sync: `bdk_wallet/examples/mainnet_mweb.rs` against a local
+unpruned node at height 3153071, differential from 3150527.
+
+| | |
+| --- | --- |
+| Added UTXOs downloaded | 52,603 |
+| Batches | 13, all at `batch_size=4096` |
+| Wall clock | 12.7 s (release build, includes the transparent Esplora gap scan) |
+| `PMMR verify failed … retrying` | **0** — no batch was ever halved |
+
+Every 4096-wide request was served whole, which is the result that matters:
+the width is bounded by Core's `MAX_REQUESTED_MWEB_UTXOS`, not by anything
+that degrades in practice.
+
+This also **retracts** an earlier note here claiming the local node refused
+every `getmwebutxos` with "Could not build segment". That was an artifact of
+the probe, not the node: the `start_index` values were hand-picked and landed
+on **spent** leaves, for which `SegmentFactory::Assemble` returns empty and
+Core disconnects. A real sync only ever requests indices drawn from the
+leafset bitmap, all unspent, and never hits that path.
+
+**Still not verified:** timings against an actual 0.21.5.6 node with the bucket
+engaged. The node above is 0.21.5.5, which predates `AllowMWEBServe`, so this
+run measures batch width on real data and not the metering path — that is what
+`tests/lip0006_throttle.rs` covers. Litecoin ships no macOS `litecoind` for
+0.21.5.6 (the DMG carries only Litecoin-Qt), so a throttled mainnet timing
+needs the Linux binary: CI, or a Linux host.
 
 ---
 
