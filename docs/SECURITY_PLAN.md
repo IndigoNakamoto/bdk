@@ -134,6 +134,12 @@ raises the bar to peer collusion or eclipse; it does not close the gap.
       `mw::Header::GetHash`). `MwebBlockHeader` has no hash method in
       rust-litecoin, so this lives here. Add a known-answer test against a
       mainnet header captured from litecoind.
+      *KAT landed 2026-08-01*: `mainnet_header_hash_known_answer` in `p2p.rs`
+      pins the raw `mwebheader` payload litecoind 0.21.5.5 served for mainnet
+      block 3,152,700 (`tests/fixtures/mainnet_mwebheader_3152700.hex`,
+      captured with `examples/capture_mwebheader.rs`; block hash
+      cross-checked against litecoinspace.org). It asserts the blake3 value,
+      the full `verify_anchored` chain, and byte-exact re-encoding, offline.
 - [x] **F-01b** Add `MwebHeaderMsg::verify_anchored(&self, block_hash: BlockHash)
       -> Result<(), Error>` implementing, in order:
       1. `self.merkle.header.block_hash() == block_hash`;
@@ -149,6 +155,16 @@ raises the bar to peer collusion or eclipse; it does not close the gap.
       assertion at `tx_builder.rs:657`), and HogEx is expected to use v8
       (`0x58`), but **verify this against Core's HogEx validation rather than
       assuming it**.
+      *Confirmed against Core source (2026-08-01)*: `CScript::IsMWEBHogAddr`
+      in `src/script/script.h` recognises exactly witness v8 (`OP_8 = 0x58`)
+      with a `WITNESS_MWEB_HEADERHASH_SIZE = 32` byte program; peg-ins use v9
+      via `CScript::IsMWEBPegin`. Core requires the HogEx to be the block's
+      final transaction and the MWEB header hash to match the committed hash
+      (`mw::Node::CheckBlock` / `BlockValidator::Validate`; audited as
+      Chk1/Chk3 in Quarkslab report 21-08-872-REP). The MWEB light-client
+      spec describes the same `vout[0]` layout:
+      `<OP_8><0x20><32-byte blake3(mweb_header)>`. Citations recorded on
+      `HOGEX_COMMITMENT_OPCODE` in `p2p.rs`.
 - [x] **F-01c** Add `VerifyMode::Anchored` as a new variant. Keep
       `#[default] HeaderAndPmmr` unchanged so the wallet's behavior does not
       move. `Anchored` runs `verify_anchored` and then everything
@@ -163,6 +179,18 @@ raises the bar to peer collusion or eclipse; it does not close the gap.
       `probe_mweb_tx_getdata_notfound` at `lip0006_tcp.rs:396`) confirming a
       live litecoind's `mwebheader` carries a merkle proof sufficient for
       `verify_anchored`. **This is the gate for flipping the default.**
+      *Probe run and passed 2026-08-01*: `probe_mainnet_anchor` against a
+      live mainnet litecoind 0.21.5.5 (127.0.0.1:9333), block 3,152,700
+      (`57250d2f79a10c41920ce7fb4ed4ab19381a71e02a6635c28b7002426f38a3ea`,
+      hash taken from the local node's RPC and cross-checked against
+      litecoinspace.org). The block carries 517 transactions; the served
+      merkle proof placed the HogEx last, and its vout[0] committed to
+      `blake3(mweb_header)` =
+      `3b749e33dccd189fdeb5a519e184e8c10975597877cb7b801d054b67e45de538`.
+      The negative case (same message verified against an unrelated hash)
+      was rejected. Note: the F-01g default flip had already landed on
+      regtest evidence before this probe was run — out of order with the
+      gate as written. This run closes that gap retroactively.
 - [x] **F-01g** Once F-01f passes, flip `#[default]` to `Anchored` in a separate
       commit and re-pin the wallet. `ScriptedMwebSource` and
       `tests/lip0006_sync.rs:26-40` build a placeholder `MerkleBlock` with a

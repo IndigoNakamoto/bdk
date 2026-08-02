@@ -59,11 +59,13 @@ pub enum VerifyMode {
 
 /// Environment variable that downgrades the default to [`VerifyMode::HeaderAndPmmr`].
 ///
-/// A rollout escape hatch, nothing more. [`VerifyMode::Anchored`] became the
-/// default on the strength of regtest evidence that litecoind's `mwebheader`
-/// carries a verifiable anchor (`tests/mweb_anchoring.rs`); if some mainnet peer
-/// turns out to serve a proof this crate cannot check, a user needs a way to
-/// keep syncing while it is diagnosed rather than being stuck on an old build.
+/// A rollout escape hatch, nothing more. [`VerifyMode::Anchored`] is the default
+/// on the strength of regtest evidence that litecoind's `mwebheader` carries a
+/// verifiable anchor (`tests/mweb_anchoring.rs`), since confirmed against mainnet
+/// (`probe_mainnet_anchor`, 2026-08-01 — see F-01f in `docs/SECURITY_PLAN.md`);
+/// if some mainnet peer turns out to serve a proof this crate cannot check, a
+/// user needs a way to keep syncing while it is diagnosed rather than being
+/// stuck on an old build.
 ///
 /// [`VerifyMode::Trusted`] is deliberately *not* reachable this way. An
 /// environment variable that switched verification off entirely would be a

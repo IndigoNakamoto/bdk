@@ -542,9 +542,10 @@ mod broadcast_tests {
     /// asks a live mainnet node for a header at a recent height and runs the
     /// full [`MwebHeaderMsg::verify_anchored`] against it.
     ///
-    /// Until this has been run and passed against mainnet, the default stays on
-    /// `HeaderAndPmmr` — see `docs/SECURITY_PLAN.md` F-01g. Record the result
-    /// there when you run it.
+    /// Run and passed on 2026-08-01 against litecoind 0.21.5.5, mainnet block
+    /// 3,152,700 — the gate for the `VerifyMode::Anchored` default is satisfied;
+    /// the result is recorded under F-01f in `docs/SECURITY_PLAN.md`. Re-run
+    /// (and re-record) if litecoind changes how it serves `mwebheader`.
     ///
     /// ```text
     /// LITECOIN_P2P=127.0.0.1:9333 LITECOIN_ANCHOR_BLOCK=<hash from a trusted source> \

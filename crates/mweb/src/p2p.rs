@@ -188,6 +188,17 @@ pub fn header_hash(header: &MwebBlockHeader) -> [u8; 32] {
 }
 
 /// Witness-version opcode prefixing the HogEx MWEB header commitment (`OP_8`).
+///
+/// Confirmed against Litecoin Core source, not just regtest observation:
+/// `CScript::IsMWEBHogAddr(mw::Hash* header_hash)` in `src/script/script.h`
+/// recognises exactly a witness-v8 program of `WITNESS_MWEB_HEADERHASH_SIZE`
+/// (= 32) bytes, with `OP_8 = 0x58` in the same header. Core's consensus checks
+/// (audited as Chk1/Chk3 in the Quarkslab MWEB audit, 21-08-872-REP) require the
+/// HogEx to be the final transaction in the block (`mw::Node::CheckBlock`) and the
+/// MWEB header hash to match the hash the HogEx commits to
+/// (`BlockValidator::Validate`). The MWEB light-client sync spec states the same
+/// layout: HogEx `vout[0]` script is `<OP_8><0x20><32-byte blake3(mweb_header)>`.
+/// Witness v9 (`0x59`) is the *peg-in* program (`CScript::IsMWEBPegin`), not this.
 const HOGEX_COMMITMENT_OPCODE: u8 = 0x58;
 /// Length of the HogEx commitment script: `OP_8` + `PUSH32` + 32-byte hash.
 const HOGEX_COMMITMENT_SPK_LEN: usize = 34;
@@ -202,7 +213,8 @@ impl MwebHeaderMsg {
     /// check passes.
     ///
     /// The chain of custody this establishes, each link verified on regtest by
-    /// `tests/mweb_anchoring.rs`:
+    /// `tests/mweb_anchoring.rs` and matching Litecoin Core's own consensus rules
+    /// (see `HOGEX_COMMITMENT_OPCODE` for the Core source references):
     ///
     /// 1. `merkle.header` hashes to `block_hash`, which the caller obtained from its own trusted
     ///    header chain rather than from this peer.
@@ -543,13 +555,29 @@ mod tests {
     /// to `mweb_header`, mirroring what litecoind serves (confirmed against a live
     /// node in `tests/mweb_anchoring.rs`).
     fn synthetic_anchored_msg(mweb_header: MwebBlockHeader) -> (MwebHeaderMsg, BlockHash) {
+        use bitcoin::{Amount, ScriptBuf, TxOut};
+
+        let mut spk = alloc::vec![0x58u8, 0x20];
+        spk.extend_from_slice(&header_hash(&mweb_header));
+        let outputs = alloc::vec![TxOut {
+            value: Amount::from_sat(2),
+            script_pubkey: ScriptBuf::from_bytes(spk),
+        }];
+        synthetic_anchored_msg_with_hogex_outputs(mweb_header, outputs)
+    }
+
+    /// Like [`synthetic_anchored_msg`], but with caller-chosen HogEx outputs. The
+    /// merkle proof is built *after* the outputs are fixed, so a defective HogEx
+    /// still arrives with a valid inclusion proof — that is what lets tests reach
+    /// the commitment-script checks rather than failing at the merkle step.
+    fn synthetic_anchored_msg_with_hogex_outputs(
+        mweb_header: MwebBlockHeader,
+        hogex_outputs: alloc::vec::Vec<bitcoin::TxOut>,
+    ) -> (MwebHeaderMsg, BlockHash) {
         use bitcoin::absolute::LockTime;
         use bitcoin::block::{Header, Version};
         use bitcoin::merkle_tree::PartialMerkleTree;
         use bitcoin::{Amount, CompactTarget, ScriptBuf, Transaction, TxMerkleNode, TxOut};
-
-        let mut spk = alloc::vec![0x58u8, 0x20];
-        spk.extend_from_slice(&header_hash(&mweb_header));
 
         let filler = Transaction {
             version: bitcoin::transaction::Version::ONE,
@@ -566,10 +594,7 @@ mod tests {
             version: bitcoin::transaction::Version::ONE,
             lock_time: LockTime::ZERO,
             input: alloc::vec![],
-            output: alloc::vec![TxOut {
-                value: Amount::from_sat(2),
-                script_pubkey: ScriptBuf::from_bytes(spk),
-            }],
+            output: hogex_outputs,
             mw_tx: None,
             is_hog_ex: true,
         };
@@ -612,6 +637,17 @@ mod tests {
         }
     }
 
+    /// Every anchoring rejection must classify as [`crate::error::BanReason::BadProof`]
+    /// via the typed discriminant, so peer rotation never depends on message wording.
+    #[track_caller]
+    fn assert_bad_proof(err: &Error) {
+        assert_eq!(
+            err.ban_reason(),
+            Some(crate::error::BanReason::BadProof),
+            "anchor rejection must be typed BadProof, got: {err}"
+        );
+    }
+
     /// F-01: an honest message anchors. Without this the rejection tests below could
     /// pass against a `verify_anchored` that rejected everything.
     #[test]
@@ -629,6 +665,7 @@ mod tests {
         assert_ne!(other, block_hash);
         let err = msg.verify_anchored(other).unwrap_err();
         assert!(alloc::format!("{err}").contains("merkle block is for"));
+        assert_bad_proof(&err);
     }
 
     /// Every field of the MWEB header is covered by the commitment, so none of the
@@ -654,6 +691,7 @@ mod tests {
                 alloc::format!("{err}").contains("does not commit to this mweb_header"),
                 "mutating `{field}` was not caught by the commitment: {err}"
             );
+            assert_bad_proof(&err);
         }
     }
 
@@ -691,10 +729,10 @@ mod tests {
             // Mutating the HogEx changes its txid, so the merkle proof fails too;
             // either rejection is correct, but it must not be accepted.
             let block_hash = msg.merkle.header.block_hash();
-            assert!(
-                msg.verify_anchored(block_hash).is_err(),
-                "commitment script case `{name}` was accepted"
+            let err = msg.verify_anchored(block_hash).expect_err(
+                alloc::format!("commitment script case `{name}` was accepted").as_str(),
             );
+            assert_bad_proof(&err);
         }
     }
 
@@ -761,6 +799,7 @@ mod tests {
             alloc::format!("{err}").contains("expected last"),
             "a non-final transaction was accepted as the HogEx: {err}"
         );
+        assert_bad_proof(&err);
     }
 
     /// A merkle proof that does not reproduce its own header's root proves nothing.
@@ -771,6 +810,56 @@ mod tests {
         let block_hash = msg.merkle.header.block_hash();
         let err = msg.verify_anchored(block_hash).unwrap_err();
         assert!(alloc::format!("{err}").contains("partial merkle tree invalid"));
+        assert_bad_proof(&err);
+    }
+
+    /// F-01a: known-answer test against a real mainnet `mwebheader`.
+    ///
+    /// The fixture is the byte-for-byte P2P `mwebheader` payload litecoind 0.21.5.5
+    /// served for mainnet block 3,152,700
+    /// (`57250d2f79a10c41920ce7fb4ed4ab19381a71e02a6635c28b7002426f38a3ea`, hash
+    /// cross-checked against litecoinspace.org on 2026-08-01; captured with
+    /// `examples/capture_mwebheader.rs`). Unlike the synthetic tests above, nothing
+    /// here was produced by this crate's encoders, so it pins [`header_hash`] and
+    /// [`MwebHeaderMsg::verify_anchored`] against what the network actually
+    /// commits to: a drift in `MwebBlockHeader`'s serialization, the blake3
+    /// domain, or the commitment-script shape all fail this test offline.
+    #[cfg(feature = "std")]
+    #[test]
+    fn mainnet_header_hash_known_answer() {
+        extern crate std;
+        use hex_conservative::FromHex;
+
+        let path = alloc::format!(
+            "{}/tests/fixtures/mainnet_mwebheader_3152700.hex",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let bytes = <alloc::vec::Vec<u8>>::from_hex(raw.trim()).unwrap();
+        let msg: MwebHeaderMsg = deserialize(&bytes).unwrap();
+
+        // The known answer: blake3 of the header as committed by the mainnet chain.
+        let expected = <[u8; 32]>::from_hex(
+            "3b749e33dccd189fdeb5a519e184e8c10975597877cb7b801d054b67e45de538",
+        )
+        .unwrap();
+        assert_eq!(header_hash(&msg.mweb_header), expected);
+
+        // And the full anchoring chain holds against the trusted mainnet block hash.
+        let block_hash: BlockHash =
+            "57250d2f79a10c41920ce7fb4ed4ab19381a71e02a6635c28b7002426f38a3ea"
+                .parse()
+                .unwrap();
+        msg.verify_anchored(block_hash).unwrap();
+
+        // Field-level sanity so a fixture mix-up is caught with a readable message.
+        assert_eq!(msg.mweb_header.height, 3_152_700);
+        assert_eq!(msg.mweb_header.output_mmr_size, 349_044);
+        assert_eq!(msg.merkle.txn.num_transactions(), 517);
+
+        // Re-encoding must reproduce the wire bytes exactly, or the hash above is
+        // being computed over something other than what litecoind serializes.
+        assert_eq!(serialize(&msg), bytes);
     }
 
     /// Anchoring failures must rotate the peer: a peer serving an unanchored header
@@ -782,6 +871,55 @@ mod tests {
             .verify_anchored(BlockHash::from_byte_array([0xFE; 32]))
             .unwrap_err();
         assert!(crate::mweb_sync::is_banworthy_peer_error(&err));
+    }
+
+    /// The three rejection paths the tests above only reach indirectly, each hit on
+    /// its own branch and classified as typed `BadProof`. Together with the tests
+    /// above, every `return Err` in [`MwebHeaderMsg::verify_anchored`] is now pinned
+    /// to the typed discriminant.
+    #[test]
+    fn remaining_anchor_rejection_paths_are_banworthy() {
+        use bitcoin::{Amount, ScriptBuf, TxOut};
+
+        // "HogEx is not proven to be in the block": the supplied HogEx's txid is
+        // not among the merkle-matched txids. Tweaking the version changes the
+        // txid while the (valid) proof still names the original.
+        let (mut msg, block_hash) = synthetic_anchored_msg(sample_mweb_header());
+        msg.hogex.version = bitcoin::transaction::Version::TWO;
+        let err = msg.verify_anchored(block_hash).unwrap_err();
+        assert!(
+            alloc::format!("{err}").contains("not proven to be in the block"),
+            "wrong branch: {err}"
+        );
+        assert_bad_proof(&err);
+
+        // "HogEx has no outputs": baked in before the merkle proof is built, so the
+        // inclusion proof is valid and the no-commitment branch is what fires.
+        let (msg, block_hash) =
+            synthetic_anchored_msg_with_hogex_outputs(sample_mweb_header(), alloc::vec![]);
+        let err = msg.verify_anchored(block_hash).unwrap_err();
+        assert!(
+            alloc::format!("{err}").contains("has no outputs"),
+            "wrong branch: {err}"
+        );
+        assert_bad_proof(&err);
+
+        // "not an MWEB header commitment script": a merkle-proven HogEx whose
+        // vout[0] has the wrong shape, reaching the script check itself rather than
+        // failing earlier on the txid.
+        let (msg, block_hash) = synthetic_anchored_msg_with_hogex_outputs(
+            sample_mweb_header(),
+            alloc::vec![TxOut {
+                value: Amount::from_sat(2),
+                script_pubkey: ScriptBuf::from_bytes(alloc::vec![0x51, 0x20]),
+            }],
+        );
+        let err = msg.verify_anchored(block_hash).unwrap_err();
+        assert!(
+            alloc::format!("{err}").contains("not an MWEB header commitment script"),
+            "wrong branch: {err}"
+        );
+        assert_bad_proof(&err);
     }
 
     /// F-14: the bounded accessor stops instead of materializing a 64x blowup.
