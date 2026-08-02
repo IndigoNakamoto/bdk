@@ -1,8 +1,9 @@
 # `crates/mweb` Security Review and Hardening Plan
 
 Scope: `crates/mweb` (`bdk_mweb`) in this fork, as consumed by `ltc-wallet-mac`
-(pinned at `BDK_REF=7462cb4248c1766f1f6ba3e4517cf89c1065b42a` in that repo's
-`deps/pins.env`).
+(pinned as `BDK_REF` in that repo's `deps/pins.env`; the SHA is deliberately
+not repeated here, since a commit cannot cite the pin that will point at it and
+this line went stale twice trying).
 
 Review date: 2026-08-01. Reviewed at ~9k LoC across `src/` and `tests/`.
 
