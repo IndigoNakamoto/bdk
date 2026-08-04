@@ -20,6 +20,8 @@ pub mod address;
 pub mod changeset;
 pub mod coin_db;
 pub mod crypto;
+#[cfg(feature = "lip0006")]
+pub mod discovery;
 #[cfg(feature = "encrypt")]
 pub mod encrypt;
 pub mod error;
