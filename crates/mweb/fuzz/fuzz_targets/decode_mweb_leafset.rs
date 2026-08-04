@@ -25,11 +25,19 @@ fn do_test(data: &[u8]) {
 
     // Re-encoding must reproduce the accepted prefix of the input. `deserialize`
     // rejects trailing bytes, so this is a strict round-trip.
-    assert_eq!(
-        serialize(&decoded),
-        data,
-        "leafset round-trip changed bytes"
-    );
+    // Non-canonical encodings (e.g. non-minimal VarInts) are accepted by
+    // consensus decode; only require the canonical form to be stable.
+    let reserialized = serialize(&decoded);
+    if reserialized != data {
+        let again: MwebLeafset = deserialize(&reserialized)
+            .expect("canonical leafset encoding must decode");
+        assert_eq!(again, decoded, "canonical leafset re-decode changed value");
+        assert_eq!(
+            serialize(&again),
+            reserialized,
+            "canonical leafset form unstable"
+        );
+    }
 
     // The index expansion is 64x the bitset in the worst case; make the fuzzer
     // actually walk it so the cap above is load-bearing rather than theoretical.

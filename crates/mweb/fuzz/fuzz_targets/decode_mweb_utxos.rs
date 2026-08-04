@@ -21,11 +21,19 @@ fn do_test(data: &[u8]) {
     // carry a format we would not have parsed.
     assert_eq!(decoded.output_format, OUTPUT_FORMAT_FULL);
 
-    assert_eq!(
-        serialize(&decoded),
-        data,
-        "mwebutxos round-trip changed bytes"
-    );
+    // Non-canonical encodings (e.g. non-minimal VarInts) are accepted by
+    // consensus decode; only require the canonical form to be stable.
+    let reserialized = serialize(&decoded);
+    if reserialized != data {
+        let again: MwebUtxos = deserialize(&reserialized)
+            .expect("canonical mwebutxos encoding must decode");
+        assert_eq!(again, decoded, "canonical mwebutxos re-decode changed value");
+        assert_eq!(
+            serialize(&again),
+            reserialized,
+            "canonical mwebutxos form unstable"
+        );
+    }
 
     // `output_id` runs on every entry during sync, before anything has been
     // verified, so it must tolerate whatever the decoder let through.

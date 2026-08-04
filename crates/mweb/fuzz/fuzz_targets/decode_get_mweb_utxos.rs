@@ -12,11 +12,19 @@ fn do_test(data: &[u8]) {
     let Ok(decoded) = deserialize::<GetMwebUtxos>(data) else {
         return;
     };
-    assert_eq!(
-        serialize(&decoded),
-        data,
-        "getmwebutxos round-trip changed bytes"
-    );
+    // Non-canonical encodings (e.g. non-minimal VarInts) are accepted by
+    // consensus decode; only require the canonical form to be stable.
+    let reserialized = serialize(&decoded);
+    if reserialized != data {
+        let again: GetMwebUtxos = deserialize(&reserialized)
+            .expect("canonical getmwebutxos encoding must decode");
+        assert_eq!(again, decoded, "canonical getmwebutxos re-decode changed value");
+        assert_eq!(
+            serialize(&again),
+            reserialized,
+            "canonical getmwebutxos form unstable"
+        );
+    }
 }
 
 fn main() {
