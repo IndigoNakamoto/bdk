@@ -33,8 +33,8 @@ nothing else, keeping the upstream *package* names so BDK manifests only change 
 
 | Dependency | Fork | Upstream base |
 | --- | --- | --- |
-| `miniscript` | `IndigoNakamoto/rust-miniscript` branch `litecoin-12.x` | 12.3.7 |
-| `electrum-client` | `IndigoNakamoto/rust-electrum-client` branch `litecoin` | 0.24.1 |
+| `miniscript` | `LitecoinDevKit/rust-miniscript` branch `litecoin-12.x` | 12.3.7 |
+| `electrum-client` | `LitecoinDevKit/rust-electrum-client` branch `litecoin` | 0.24.1 |
 | `esplora-client` | `IndigoNakamoto/rust-esplora-client` branch `litecoin` | 0.12.3 |
 
 ### Why miniscript sits on the 12.x line
@@ -57,7 +57,7 @@ and no duplicate types appear.
 
 Ported: `bdk_core`, `bdk_chain`, `bdk_file_store`, `bdk_electrum`, `bdk_esplora`, and
 `bdk_testenv` (including the Litecoin regtest harness). Wallet work lives in the separate
-[`IndigoNakamoto/bdk_wallet`](https://github.com/IndigoNakamoto/bdk_wallet) `litecoin` branch.
+[`LitecoinDevKit/bdk_wallet`](https://github.com/LitecoinDevKit/bdk_wallet) `litecoin` branch.
 
 Deferred:
 
@@ -87,16 +87,16 @@ rust-litecoin  ←  bdk (this repo)  ←  bdk_wallet  ←  bdk-ffi      → AAR 
    (patch)                  ↖︎______________↖︎______  ltc-wallet-mac → macOS/Linux app
 ```
 
-- [`IndigoNakamoto/bdk`](https://github.com/IndigoNakamoto/bdk) (this repo, `litecoin` branch)
+- [`LitecoinDevKit/bdk`](https://github.com/LitecoinDevKit/bdk) (this repo, `litecoin` branch)
   holds the core crates (`bdk_chain`, `bdk_electrum`, `bdk_esplora`, `bdk_mweb`, …) and patches
   crates-io `litecoin` to a pinned rev of
-  [`IndigoNakamoto/rust-litecoin`](https://github.com/IndigoNakamoto/rust-litecoin).
-- [`IndigoNakamoto/bdk_wallet`](https://github.com/IndigoNakamoto/bdk_wallet) (`litecoin` branch)
+  [`LitecoinDevKit/rust-litecoin`](https://github.com/LitecoinDevKit/rust-litecoin).
+- [`LitecoinDevKit/bdk_wallet`](https://github.com/LitecoinDevKit/bdk_wallet) (`litecoin` branch)
   pins this repo's crates by rev in its `Cargo.toml`.
-- [`IndigoNakamoto/bdk-ffi`](https://github.com/IndigoNakamoto/bdk-ffi) (`litecoin-mweb` branch)
+- [`LitecoinDevKit/bdk-ffi`](https://github.com/LitecoinDevKit/bdk-ffi) (`litecoin-mweb` branch)
   pins `bdk_wallet` and this repo by rev. Its CI asserts the bdk rev it pins matches the one its
   pinned `bdk_wallet` pins (`scripts/check-rev-coherence.sh`).
-- [`ltc-wallet-mac`](https://github.com/IndigoNakamoto/ltc-wallet-mac) pins `bdk_wallet` and this
+- [`ltc-wallet-mac`](https://github.com/LitecoinDevKit/ltc-wallet-mac) pins `bdk_wallet` and this
   repo by rev the same way.
 
 **Coherence rule:** every consumer must pin the *same* `bdk.git` rev that its pinned `bdk_wallet`
@@ -117,7 +117,7 @@ gitignored `.cargo/config.toml` at the consumer's root pointing at sibling check
 pinned revs.
 
 **Publishing story:** the distribution artifacts are the Android AAR + Swift xcframework from
-bdk-ffi's release workflow, the [`ltc-swift`](https://github.com/IndigoNakamoto/ltc-swift) SwiftPM
+bdk-ffi's release workflow, the [`ltc-swift`](https://github.com/LitecoinDevKit/ltc-swift) SwiftPM
 tag, and ltc-wallet-mac's app bundles. Publishing the Rust crates to crates.io would require
 renaming them (e.g. an `ltc-` prefix), since the `bdk_*` names are owned upstream; that is a
 possible future step, not a current one.

@@ -29,7 +29,7 @@
 > Transparent wallets (legacy and SegWit) sync via Electrum/Esplora or
 > [`bdk_bitcoind_rpc`](./crates/bitcoind_rpc) (vendored Litecoin `bitcoincore-rpc` 0.19). MWEB is
 > spendable through [`bdk_mweb`](./crates/mweb) and the nested
-> [`bdk_wallet`](https://github.com/IndigoNakamoto/bdk_wallet) `mweb` feature. Regtest uses
+> [`bdk_wallet`](https://github.com/LitecoinDevKit/bdk_wallet) `mweb` feature. Regtest uses
 > `litecoind` (+ optional `electrs-ltc`); see [docs/LITECOIN_E2E.md](./docs/LITECOIN_E2E.md).
 
 ## About

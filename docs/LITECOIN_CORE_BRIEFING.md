@@ -6,7 +6,7 @@
 
 ## What this is
 
-We’ve forked [bitcoindevkit/bdk](https://github.com/bitcoindevkit/bdk) onto a `litecoin` branch ([IndigoNakamoto/bdk](https://github.com/IndigoNakamoto/bdk)) so wallet apps can target Litecoin (transparent + MWEB) without rewriting BDK’s `bitcoin::` API surface.
+We’ve forked [bitcoindevkit/bdk](https://github.com/bitcoindevkit/bdk) onto a `litecoin` branch ([LitecoinDevKit/bdk](https://github.com/LitecoinDevKit/bdk)) so wallet apps can target Litecoin (transparent + MWEB) without rewriting BDK’s `bitcoin::` API surface.
 
 **Design choices Core would care about:**
 
@@ -14,7 +14,7 @@ We’ve forked [bitcoindevkit/bdk](https://github.com/bitcoindevkit/bdk) onto a 
 - **Native Rust MWEB** (`bdk_mweb`): port semantics from ltcsuite — **no Go FFI**, no GPL Nexus/`lndltc`, no embedded `mwebd`.
 - **Thin re-appliable layer** so `git merge upstream/master` stays cheap (19 `ltc:` commits on top of upstream as of 2026-07-27).
 
-Wallet facade lives in sibling repo `IndigoNakamoto/bdk_wallet` (`litecoin`); this repo holds `bdk_core` / `bdk_chain` / clients / `bdk_mweb`.
+Wallet facade lives in sibling repo `LitecoinDevKit/bdk_wallet` (`litecoin`); this repo holds `bdk_core` / `bdk_chain` / clients / `bdk_mweb`.
 
 ### Validation path: Nexus first, then BDK
 

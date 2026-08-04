@@ -5,7 +5,7 @@ authenticated before it is parsed. These targets cover that boundary: the wire
 decoders, the P2P framing, the PMMR index arithmetic, the verification
 functions, and the sync loop itself.
 
-The harness mirrors [`rust-litecoin/fuzz`](https://github.com/IndigoNakamoto/rust-litecoin)
+The harness mirrors [`rust-litecoin/fuzz`](https://github.com/LitecoinDevKit/rust-litecoin)
 — same honggfuzz driver, same `fuzz.sh` / `fuzz-util.sh` layout, same
 `duplicate_crash` reproduction flow — so a crash is triaged the same way in
 either repo.

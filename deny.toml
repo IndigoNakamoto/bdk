@@ -78,8 +78,8 @@ unknown-git = "deny"
 # patched by *branch* in the workspace Cargo.toml, so a fresh `cargo update`
 # follows the branch; see docs/SUPPLY_CHAIN.md.
 allow-git = [
-  "https://github.com/IndigoNakamoto/rust-litecoin.git",
-  "https://github.com/IndigoNakamoto/rust-electrum-client",
+  "https://github.com/LitecoinDevKit/rust-litecoin.git",
+  "https://github.com/LitecoinDevKit/rust-electrum-client",
   "https://github.com/IndigoNakamoto/rust-esplora-client",
-  "https://github.com/IndigoNakamoto/rust-miniscript",
+  "https://github.com/LitecoinDevKit/rust-miniscript",
 ]

@@ -5,8 +5,8 @@ ported `bdk_wallet` against live Litecoin testnet infrastructure.
 
 ## Prerequisites
 
-- This BDK workspace (`IndigoNakamoto/bdk`, branch `litecoin`) with `examples/ltc-scan`
-- Nested or sibling [`IndigoNakamoto/bdk_wallet`](https://github.com/IndigoNakamoto/bdk_wallet)
+- This BDK workspace (`LitecoinDevKit/bdk`, branch `litecoin`) with `examples/ltc-scan`
+- Nested or sibling [`LitecoinDevKit/bdk_wallet`](https://github.com/LitecoinDevKit/bdk_wallet)
   on branch `litecoin`
 - Network access to Electrum-LTC (`ssl://electrum-ltc.bysh.me:51002`) and optionally
   `https://litecoinspace.org/testnet/api`

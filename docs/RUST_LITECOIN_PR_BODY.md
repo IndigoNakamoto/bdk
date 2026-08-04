@@ -4,7 +4,7 @@ Narrative / false paths / live proof: [`REVIEWERS_GUIDE.md`](REVIEWERS_GUIDE.md)
 
 **Opened:** https://github.com/rust-litecoin/rust-litecoin/pull/9  
 Target: `rust-litecoin/rust-litecoin` base `0.32`  
-Head: `IndigoNakamoto:mweb-psbt-typed-maps`  
+Head: `LitecoinDevKit:mweb-psbt-typed-maps`  
 Version: **0.32.8-rc.2**
 
 ## Summary

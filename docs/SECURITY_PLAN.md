@@ -723,7 +723,7 @@ low-download-count crate with an independent C submodule.
       means owning the update. Recommend vendoring given it is consensus crypto.
 - [x] **F-20c** Add `deny.toml` mirroring `ltc-wallet-mac/deny.toml`:
       `unknown-registry = "deny"`, `unknown-git = "deny"`,
-      `allow-git = [IndigoNakamoto/rust-litecoin]` (the workspace `[patch]` at
+      `allow-git = [LitecoinDevKit/rust-litecoin]` (the workspace `[patch]` at
       `Cargo.toml:31-32` pins it to commit `0b328533...`), `yanked = "deny"`,
       and the same license allowlist.
 - [x] **F-20d** Add a `supply-chain` CI job running

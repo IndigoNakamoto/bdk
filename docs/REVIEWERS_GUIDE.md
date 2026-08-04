@@ -121,7 +121,7 @@ Focus on:
 - Phase 0 bridge filter in the indexer
 - New crate `crates/mweb` (`bdk_mweb`) — crypto, scan, tx build, LIP/mwebsync, thin PSBT helpers
 - Parallel persist (`ChangeSet` / `MwebStore`) — not folded into `Wallet::ChangeSet`
-- Wallet facade lives in sibling [`IndigoNakamoto/bdk_wallet`](https://github.com/IndigoNakamoto/bdk_wallet)
+- Wallet facade lives in sibling [`LitecoinDevKit/bdk_wallet`](https://github.com/LitecoinDevKit/bdk_wallet)
   `litecoin` branch
 
 Merge hygiene: `master` tracks upstream unmodified; `litecoin` should stay re-appliable

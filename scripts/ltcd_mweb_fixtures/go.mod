@@ -1,4 +1,4 @@
-module github.com/IndigoNakamoto/bdk/scripts/ltcd_mweb_fixtures
+module github.com/LitecoinDevKit/bdk/scripts/ltcd_mweb_fixtures
 
 go 1.23.0
 

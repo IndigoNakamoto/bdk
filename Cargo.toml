@@ -11,7 +11,7 @@ members = [
     "crates/testenv",
     "examples/ltc-scan",
 ]
-# `bdk_wallet` is a nested clone of the separate IndigoNakamoto/bdk_wallet fork.
+# `bdk_wallet` is a nested clone of the separate LitecoinDevKit/bdk_wallet fork.
 # `vendor/bitcoincore-rpc` is its own Cargo workspace (path dep of bdk_bitcoind_rpc).
 # `crates/mweb/fuzz` needs its own release profile (overflow checks on).
 exclude = ["bdk_wallet", "bdk-ffi", "vendor/bitcoincore-rpc", "crates/mweb/fuzz"]
@@ -30,4 +30,4 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)
 
 # Until crates.io publishes litecoin 0.32.8-rc.2 (native PSBTv2 MWEB maps).
 [patch.crates-io]
-litecoin = { git = "https://github.com/IndigoNakamoto/rust-litecoin.git", rev = "0b3285337f3cc508a5549d245ce20d3b52418f3a" }
+litecoin = { git = "https://github.com/LitecoinDevKit/rust-litecoin.git", rev = "0b3285337f3cc508a5549d245ce20d3b52418f3a" }

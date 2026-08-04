@@ -90,7 +90,7 @@ against it.
 
 | | |
 | --- | --- |
-| Source | `https://github.com/IndigoNakamoto/rust-litecoin.git`, branch `mweb-psbt-typed-maps` |
+| Source | `https://github.com/LitecoinDevKit/rust-litecoin.git`, branch `mweb-psbt-typed-maps` |
 | Locked rev | `0b3285337f3cc508a5549d245ce20d3b52418f3a` (`Cargo.lock`) |
 | Applied via | `[patch.crates-io]` in the workspace `Cargo.toml` |
 | Why | Native PSBTv2 MWEB typed maps, not yet published as `litecoin` 0.32.8-rc.2 |
