@@ -6,7 +6,7 @@
 //! before any verification runs.
 
 use bdk_mweb::limits::{MAX_PARENT_HASHES, MAX_UTXOS_PER_BATCH};
-use bdk_mweb::p2p::{MwebUtxoEntry, MwebUtxos, OUTPUT_FORMAT_FULL};
+use bdk_mweb::p2p::{MwebUtxos, OUTPUT_FORMAT_FULL};
 use honggfuzz::fuzz;
 use litecoin::consensus::encode::{deserialize, serialize};
 
@@ -57,6 +57,7 @@ mod tests {
     /// `mwebutxos`, so the assertions above need real encodings to run against.
     #[test]
     fn sweep_valid_encodings() {
+        use bdk_mweb::p2p::MwebUtxoEntry;
         use litecoin::blockdata::mimblewimble::{Output, OutputMessage};
         use litecoin::consensus::encode::serialize;
         use litecoin::hashes::Hash;
@@ -68,7 +69,7 @@ mod tests {
         for n in [0usize, 1, 2, 16] {
             for extra in [0usize, 1, 300] {
                 let utxos = (0..n)
-                    .map(|i| super::MwebUtxoEntry {
+                    .map(|i| MwebUtxoEntry {
                         leaf_index: i as u64,
                         output: Output {
                             commitment: [i as u8; 33],

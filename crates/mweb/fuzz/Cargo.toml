@@ -29,7 +29,7 @@ overflow-checks = true
 # excluded from that workspace (it needs its own release profile), so it has to
 # repeat the patch.
 [patch.crates-io]
-litecoin = { git = "https://github.com/LitecoinDevKit/rust-litecoin.git", branch = "mweb-psbt-typed-maps" }
+litecoin = { git = "https://github.com/LitecoinDevKit/rust-litecoin.git", rev = "0b3285337f3cc508a5549d245ce20d3b52418f3a" }
 
 [lib]
 name = "bdk_mweb_fuzz"
