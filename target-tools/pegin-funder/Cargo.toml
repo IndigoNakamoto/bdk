@@ -1,0 +1,27 @@
+# One-off tool: peg testnet LTC from the smoke wallet's transparent balance
+# into its own MWEB side, so the mobile smoke apps can exercise the full
+# receive -> spend loop. Not part of the workspace.
+[workspace]
+
+[package]
+name = "pegin-funder"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bdk_wallet = { git = "https://github.com/IndigoNakamoto/bdk_wallet.git", rev = "5118184083a2451f49996324f132dfe05c8a8318", features = ["all-keys", "keys-bip39", "rusqlite", "mweb", "mweb-sqlite"] }
+bdk_electrum = { path = "../../crates/electrum", default-features = false, features = ["use-rustls-ring"] }
+bdk_mweb = { path = "../../crates/mweb", features = ["rusqlite", "lip0006"] }
+anyhow = "1"
+
+# bdk_wallet pulls bdk_chain/bdk_mweb from bdk.git; redirect them to this
+# repo's crates so its types unify with the path deps above.
+[patch."https://github.com/IndigoNakamoto/bdk.git"]
+bdk_chain = { path = "../../crates/chain" }
+bdk_mweb = { path = "../../crates/mweb" }
+
+# Until crates.io publishes litecoin 0.32.8-rc.2 (native PSBTv2 MWEB maps).
+# Must stay on the same rev the bdk fork pins, so litecoin types unify.
+[patch.crates-io]
+litecoin = { git = "https://github.com/IndigoNakamoto/rust-litecoin.git", rev = "0b3285337f3cc508a5549d245ce20d3b52418f3a" }
