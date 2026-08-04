@@ -14,5 +14,8 @@ crates/electrum/target
 # Nested clone of IndigoNakamoto/bdk_wallet (separate repo; see PORTING.md).
 /bdk_wallet/
 
+# Nested clone of IndigoNakamoto/bdk-ffi (UniFFI bindings; separate repo).
+/bdk-ffi/
+
 # Local ltcd checkout for one-off MWEB fixture generation (see scripts/ltcd_mweb_fixtures).
 /scripts/ltcd_mweb_fixtures/vendor-ltcd/
