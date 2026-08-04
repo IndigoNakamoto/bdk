@@ -76,6 +76,52 @@ Ported extras:
 For upstream PRs to rust-litecoin or BDK, see
 [`docs/REVIEWERS_GUIDE.md`](docs/REVIEWERS_GUIDE.md) (why / false paths / live proof).
 
+## Repo topology and dependency pinning
+
+The fork ecosystem mirrors upstream's repo boundaries, but since the crates
+are not published to crates.io (the `bdk_*` names belong upstream), the repos
+link through **rev-pinned git dependencies** instead of registry versions:
+
+```
+rust-litecoin  ←  bdk (this repo)  ←  bdk_wallet  ←  bdk-ffi      → AAR / xcframework / ltc-swift
+   (patch)                  ↖︎______________↖︎______  ltc-wallet-mac → macOS/Linux app
+```
+
+- [`IndigoNakamoto/bdk`](https://github.com/IndigoNakamoto/bdk) (this repo, `litecoin` branch)
+  holds the core crates (`bdk_chain`, `bdk_electrum`, `bdk_esplora`, `bdk_mweb`, …) and patches
+  crates-io `litecoin` to a pinned rev of
+  [`IndigoNakamoto/rust-litecoin`](https://github.com/IndigoNakamoto/rust-litecoin).
+- [`IndigoNakamoto/bdk_wallet`](https://github.com/IndigoNakamoto/bdk_wallet) (`litecoin` branch)
+  pins this repo's crates by rev in its `Cargo.toml`.
+- [`IndigoNakamoto/bdk-ffi`](https://github.com/IndigoNakamoto/bdk-ffi) (`litecoin-mweb` branch)
+  pins `bdk_wallet` and this repo by rev. Its CI asserts the bdk rev it pins matches the one its
+  pinned `bdk_wallet` pins (`scripts/check-rev-coherence.sh`).
+- [`ltc-wallet-mac`](https://github.com/IndigoNakamoto/ltc-wallet-mac) pins `bdk_wallet` and this
+  repo by rev the same way.
+
+**Coherence rule:** every consumer must pin the *same* `bdk.git` rev that its pinned `bdk_wallet`
+rev pins internally. If they diverge, Cargo treats them as two different sources, builds two copies
+of `bdk_chain`/`bdk_mweb`, and the build fails on type mismatches (loudly, which is the point).
+The same applies to the `litecoin` crates-io patch rev.
+
+**Bumping revs** (order matters, leaves to root):
+
+1. Push the change to this repo (`litecoin` branch); note the new SHA.
+2. In `bdk_wallet`, update every `bdk.git` rev to that SHA, build, push; note the new SHA.
+3. In `bdk-ffi` and `ltc-wallet-mac`, update the `bdk_wallet.git` rev *and* the `bdk.git` revs
+   (to the SHA from step 1), rebuild so `Cargo.lock` updates, push.
+
+**Local development:** to hack across repos without pushing, add `[patch]` overrides in a
+gitignored `.cargo/config.toml` at the consumer's root pointing at sibling checkouts — see the
+"Local development" section of each consumer's README. The committed manifests always keep the
+pinned revs.
+
+**Publishing story:** the distribution artifacts are the Android AAR + Swift xcframework from
+bdk-ffi's release workflow, the [`ltc-swift`](https://github.com/IndigoNakamoto/ltc-swift) SwiftPM
+tag, and ltc-wallet-mac's app bundles. Publishing the Rust crates to crates.io would require
+renaming them (e.g. an `ltc-` prefix), since the `bdk_*` names are owned upstream; that is a
+possible future step, not a current one.
+
 ## Merging upstream
 
 `master` tracks `upstream/master` unmodified. To take a new upstream release:
