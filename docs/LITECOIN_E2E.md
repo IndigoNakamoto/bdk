@@ -3,6 +3,28 @@
 This walkthrough is the "works end to end" artifact for the Litecoin fork. It uses the
 ported `bdk_wallet` against live Litecoin testnet infrastructure.
 
+New to the stack? Start with [`ADOPTION.md`](ADOPTION.md). Migrating off embedded mwebd?
+See [`MIGRATE_FROM_MWEBD.md`](MIGRATE_FROM_MWEBD.md).
+
+## Start here (≈30 minutes)
+
+Happy path for a first integration day (maps-first APIs only):
+
+| Goal | Command / entry |
+| --- | --- |
+| 1. Watch-only transparent sync | §1 `ltc-scan` (this repo) |
+| 2. BIP84 testnet receive + spend | §2 `bdk_wallet` `--example electrum` |
+| 3. MWEB on regtest (optional) | §4 `mweb_regtest` + tip seam below |
+| 4. MWEB mainnet soft-key loop | § “BDK ↔ Nexus” `mainnet_mweb` CLI |
+
+Facade calls to use everywhere:
+
+- Peg-in: `Wallet::prepare_mweb_pegin` → extract/broadcast
+- Send / peg-out: `fund_mweb_send` / `fund_mweb_pegout` → `sign_and_extract_funded_mweb`
+- Balance: `balance_combined` / `balance_combined_store`; selection via `unspent_spendable` (maturity 6)
+
+Do **not** use deprecated `build_mweb_*` / `attach_mweb_tx` in new code.
+
 ## Prerequisites
 
 - This BDK workspace (`LitecoinDevKit/bdk`, branch `litecoin`) with `examples/ltc-scan`
@@ -148,7 +170,8 @@ Electrum/Esplora/RPC → Wallet::apply_update / apply_block
    `bdk_mweb::seal` / `seal_changeset`. Persist `SyncState` (`leafset` + height map) beside the store
    so the next pass only downloads **added** leaves.
 6. Peg-out / send from **spendable** coins (`unspent_spendable` / maturity gate):
-   `build_mweb_pegout` / `build_mweb_send` (`*_with(..., include_unconfirmed)` bypass).
+   `fund_mweb_pegout` / `fund_mweb_send` → `sign_and_extract_funded_mweb`
+   (deprecated `build_mweb_*` / `*_with(..., include_unconfirmed)` — do not use in new code).
 
 No separate Electrum+MWEB binary is required for regtest; the tip seam is identical.
 

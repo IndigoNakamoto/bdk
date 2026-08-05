@@ -21,16 +21,21 @@
   </h4>
 </div>
 
-> **This is a Litecoin fork of BDK.** Every crate keeps its `bdk_*` name and its `bitcoin::` paths,
-> but the `bitcoin` dependency is aliased to the [`litecoin`] crate, so those paths resolve to
-> Litecoin types. Read [PORTING.md](./PORTING.md) before using it: it covers the strategy, the
-> dependency forks it needs, and the limitations inherited from the Litecoin ecosystem.
+> **This is a Litecoin fork of BDK (LitecoinDevKit).** Every crate keeps its `bdk_*` name and its
+> `bitcoin::` paths, but the `bitcoin` dependency is aliased to the [`litecoin`] crate, so those
+> paths resolve to Litecoin types.
+>
+> **Integrating a wallet?** Start with **[docs/ADOPTION.md](./docs/ADOPTION.md)** (Rust vs FFI,
+> blessed pins, maps-first MWEB API). Prove it with
+> [docs/DOGFOOD_CHECKLIST.md](./docs/DOGFOOD_CHECKLIST.md). Port internals: [PORTING.md](./PORTING.md).
+> E2E recipes: [docs/LITECOIN_E2E.md](./docs/LITECOIN_E2E.md). Leaving embedded mwebd:
+> [docs/MIGRATE_FROM_MWEBD.md](./docs/MIGRATE_FROM_MWEBD.md) **first**.
 >
 > Transparent wallets (legacy and SegWit) sync via Electrum/Esplora or
 > [`bdk_bitcoind_rpc`](./crates/bitcoind_rpc) (vendored Litecoin `bitcoincore-rpc` 0.19). MWEB is
-> spendable through [`bdk_mweb`](./crates/mweb) and the nested
+> spendable through [`bdk_mweb`](./crates/mweb) and
 > [`bdk_wallet`](https://github.com/LitecoinDevKit/bdk_wallet) `mweb` feature. Regtest uses
-> `litecoind` (+ optional `electrs-ltc`); see [docs/LITECOIN_E2E.md](./docs/LITECOIN_E2E.md).
+> `litecoind` (+ optional `electrs-ltc`).
 
 ## About
 

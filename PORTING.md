@@ -76,6 +76,9 @@ Ported extras:
 For upstream PRs to rust-litecoin or BDK, see
 [`docs/REVIEWERS_GUIDE.md`](docs/REVIEWERS_GUIDE.md) (why / false paths / live proof).
 
+For wallet teams integrating LDK (not porting internals), start with
+[`docs/ADOPTION.md`](docs/ADOPTION.md).
+
 ## Repo topology and dependency pinning
 
 The fork ecosystem mirrors upstream's repo boundaries, but since the crates

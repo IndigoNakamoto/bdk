@@ -149,7 +149,32 @@ What already matches: LIP-0006 message order, leafset blake3, PMMR `output_root`
 
 ---
 
-## 4. Non-goals
+## 4. Key origins (HWI prep — not HWI product)
+
+Soft-key fund/sign is shipped. Hardware / external-signer **product** work is deferred. The
+PSBT story below is locked so HWI can plug in later without a wire-format change.
+
+| Item | Behavior |
+| --- | --- |
+| `MwebMasterScanKey` | PSBT type **`0x9A`** — `(PublicKey, KeySource)` |
+| `MwebMasterSpendKey` | PSBT type **`0x9B`** — `(PublicKey, KeySource)` |
+| Populate | `bdk_mweb::psbt::populate_mweb_key_origins` on fund (ltcwallet `populateMwebKeyOrigins`) |
+| Validate present | `validate_mweb_key_origins` |
+| Validate match wallet | `validate_mweb_key_origins_against` — rejects mismatched fingerprint/path (coordinators / HWI routing) |
+| Scrub | `scrub_sensitive_fields` **keeps** `0x9A`/`0x9B`; strips amount / shared secret / address index / Ke from inputs |
+
+**Integrator rules until HWI lands**
+
+1. Do not invent alternate origin key types or drop origins before handoff to an external signer.
+2. Prefer maps-first `fund_mweb_*` → sign → scrub → `extract_tx_with_mweb` so origins are populated consistently.
+3. Soft-key path may sign in-process after populate; an HWI path should stop after fund (+ optional scrub policy), ship the PSBT, and verify origins on return with `validate_mweb_key_origins_against`.
+4. No USB transport, `SignMwebComponents`-shaped device trait, or HWI crate in this tree yet.
+
+See also [`ADOPTION.md`](ADOPTION.md) § PSBT / HWI prep.
+
+---
+
+## 5. Non-goals
 
 - Vendoring Go / FFI to ltcd  
 - Replacing zkp FFI with Go `mw`  
@@ -159,10 +184,11 @@ What already matches: LIP-0006 message order, leafset blake3, PMMR `output_root`
   only Core `m/0'/100'/{0,1}'` and explicit `MasterKeyScheme::Lip0004`  
 - Porting ltcwallet aezeed / import / recovery / routing tests or mwebsync Go suites
   (BDK wallet + `MwebSyncer` coverage is Rust-native)
+- Shipping an HWI / USB external-signer product in this phase (origins only — §4)
 
 ---
 
-## 5. Test parity (golden fixtures)
+## 6. Test parity (golden fixtures)
 
 Port **data**, not Go test logic:
 

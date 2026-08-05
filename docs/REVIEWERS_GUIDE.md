@@ -10,6 +10,9 @@ Longer context: [`PORTING.md`](../PORTING.md), [`MWEB_ARCHITECTURE.md`](MWEB_ARC
 [`LTCSUITE_ALIGNMENT.md`](LTCSUITE_ALIGNMENT.md), [`LITECOIN_E2E.md`](LITECOIN_E2E.md),
 [`LITECOIN_CORE_BRIEFING.md`](LITECOIN_CORE_BRIEFING.md).
 
+Wallet-team onboarding (not reviewer narrative): [`ADOPTION.md`](ADOPTION.md),
+[`MIGRATE_FROM_MWEBD.md`](MIGRATE_FROM_MWEBD.md), [`INDEXING_NOTES.md`](INDEXING_NOTES.md).
+
 ---
 
 ## One-liner
