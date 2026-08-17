@@ -9,7 +9,7 @@ use bdk_mweb::keys::{MasterKeyScheme, MasterKeys};
 use bdk_testenv::try_node_from_env;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::SecretKey;
-use bitcoin::{Network, NetworkKind, PrivateKey};
+use bitcoin::{Network, PrivateKey};
 use hex_conservative::FromHex;
 use serde_json::json;
 
@@ -47,7 +47,7 @@ fn core_mweb_addresses_match_bdk_after_sethdseed() {
     // Core reserves MWEB indices 0 and 1 (change / peg-in); `getnewaddress` starts at 2.
     for index in 2u32..6 {
         let expected = keys
-            .address(index, NetworkKind::Test, &secp)
+            .address(index, Network::Regtest, &secp)
             .unwrap()
             .to_string();
         let v = env

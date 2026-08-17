@@ -5,6 +5,7 @@
 use alloc::vec::Vec;
 
 use bitcoin::address::AddressData;
+use bitcoin::address::MwebHrp;
 use bitcoin::blockdata::mimblewimble::{
     self as mweb, Input, Kernel, KernelFeatures, Output, OutputFeatures, OutputMessage,
     OutputMessageStandardFields, PegOutCoin, TxBody,
@@ -13,7 +14,7 @@ use bitcoin::consensus::encode::serialize;
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::{All, PublicKey, Scalar, SecretKey};
 use bitcoin::transaction::Version;
-use bitcoin::{Address, NetworkKind, ScriptBuf, Transaction, TxIn, TxOut};
+use bitcoin::{Address, ScriptBuf, Transaction, TxIn, TxOut};
 use zeroize::Zeroizing;
 
 use crate::coin_db::MwebCoin;
@@ -142,9 +143,10 @@ impl MwebTxBuilder {
         self,
         keys: &MasterKeys,
         change_index: u32,
-        network: NetworkKind,
+        network: impl Into<MwebHrp>,
         secp: &Secp256k1<All>,
     ) -> Result<FinishedMwebTx, Error> {
+        let network = network.into();
         let input_total = checked_amount_total(self.inputs.iter().map(|c| c.amount))?;
         let recipient_total = checked_amount_total(self.recipients.iter().map(|(_, a)| *a))?;
         let pegout_total = checked_amount_total(self.pegouts.iter().map(|(_, a)| *a))?;
@@ -196,9 +198,10 @@ pub fn build_pegin(
     receive_index: u32,
     pegin_amount: u64,
     fee: u64,
-    network: NetworkKind,
+    network: impl Into<MwebHrp>,
     secp: &Secp256k1<All>,
 ) -> Result<FinishedMwebPegin, Error> {
+    let network = network.into();
     if pegin_amount <= fee {
         return Err(Error::InsufficientFunds);
     }

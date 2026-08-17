@@ -8,6 +8,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use bitcoin::address::AddressData;
+use bitcoin::address::MwebHrp;
 use bitcoin::blockdata::mimblewimble::{
     self as mweb, KernelFeatures, PegOutCoin, Transaction as MwebTransaction, TxBody,
 };
@@ -16,7 +17,7 @@ use bitcoin::psbt::mweb::{MwebInput, MwebKernel};
 use bitcoin::psbt::Psbt;
 use bitcoin::secp256k1::All;
 use bitcoin::transaction::Version;
-use bitcoin::{Address, NetworkKind, ScriptBuf, Transaction};
+use bitcoin::{Address, ScriptBuf, Transaction};
 
 use crate::coin_db::MwebCoin;
 use crate::crypto::{blind_sum, blind_switch, random_secret};
@@ -77,9 +78,10 @@ pub fn fund_mweb_spend(
     fee: u64,
     keys: &MasterKeys,
     change_index: u32,
-    network: NetworkKind,
+    network: impl Into<MwebHrp>,
     secp: &Secp256k1<All>,
 ) -> Result<FundedMwebPsbt, Error> {
+    let network = network.into();
     if inputs.is_empty() {
         return Err(Error::MissingCoinSecrets);
     }
@@ -410,9 +412,10 @@ pub fn fund_mweb_pegin(
     receive_index: u32,
     pegin_amount: u64,
     fee: u64,
-    network: NetworkKind,
+    network: impl Into<MwebHrp>,
     secp: &Secp256k1<All>,
 ) -> Result<FundedMwebPegin, Error> {
+    let network = network.into();
     if pegin_amount <= fee {
         return Err(Error::InsufficientFunds);
     }

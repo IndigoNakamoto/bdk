@@ -18,7 +18,7 @@ fn core_finalize_pegin_recognized_after_maturity() {
     let mining = env.mine_to_pre_mweb().expect("pre-mweb mine");
     let mweb = env.rpc.get_new_mweb_address().expect("mweb addr");
     assert!(
-        mweb.to_string().starts_with("tmweb1"),
+        mweb.to_string().starts_with("rmweb1"),
         "regtest MWEB HRP, got {mweb}"
     );
 

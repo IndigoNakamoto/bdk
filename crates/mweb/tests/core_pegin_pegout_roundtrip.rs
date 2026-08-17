@@ -8,7 +8,7 @@ use bdk_mweb::tx_builder::{build_pegin, kernel_id, MwebTxBuilder, CHANGE_ADDRESS
 use bdk_mweb::{scan_litecoin_tx, AddressBook, MwebCoinDatabase, DEFAULT_GAP_LIMIT};
 use bdk_testenv::{try_node_from_env, MWEB_PEGIN_MATURITY};
 use bitcoin::key::Secp256k1;
-use bitcoin::{Amount, Network, NetworkKind};
+use bitcoin::{Amount, Network};
 use hex_conservative::FromHex;
 
 const SEED_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -41,7 +41,7 @@ fn bdk_pegin_then_pegout_roundtrip() {
         2,
         pegin_amount.to_sat(),
         mweb_fee.to_sat(),
-        NetworkKind::Test,
+        Network::Regtest,
         &secp,
     )
     .expect("build_pegin");
@@ -78,7 +78,7 @@ fn bdk_pegin_then_pegout_roundtrip() {
         .add_input(coin.clone())
         .add_pegout(pegout_addr.script_pubkey(), pegout_amt.to_sat())
         .fee(pegout_fee.to_sat())
-        .finish(&keys, CHANGE_ADDRESS_INDEX, NetworkKind::Test, &secp)
+        .finish(&keys, CHANGE_ADDRESS_INDEX, Network::Regtest, &secp)
         .expect("peg-out finish");
 
     let (allowed, reason) = env

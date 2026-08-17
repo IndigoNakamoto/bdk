@@ -29,5 +29,6 @@ print_stderr = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)', 'cfg(daemon_tests)'] }
 
 # Until crates.io publishes litecoin 0.32.8-rc.2 (native PSBTv2 MWEB maps).
+# v24-rmweb: Core v24 regtest MWEB HRP. Do not merge to litecoin until CI pins v24.
 [patch.crates-io]
-litecoin = { git = "https://github.com/LitecoinDevKit/rust-litecoin.git", rev = "5a0233712bdefc568fb45d71f42c028e196c4352" }
+litecoin = { git = "https://github.com/LitecoinDevKit/rust-litecoin.git", rev = "dbf93a12328af143e32ab90cd3d079afa46929d9" }

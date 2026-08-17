@@ -26,7 +26,7 @@ use bdk_mweb::lip0006_tcp::TcpMwebPeer;
 use bdk_mweb::{AddressBook, MwebCoinDatabase, DEFAULT_GAP_LIMIT};
 use bdk_testenv::{try_node_from_env_with_policy, PeerPolicy};
 use bitcoin::key::Secp256k1;
-use bitcoin::{Amount, Network, NetworkKind};
+use bitcoin::{Amount, Network};
 use hex_conservative::FromHex;
 
 const SEED_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -54,7 +54,7 @@ fn sync_completes_against_a_rate_limiting_peer() {
     )
     .unwrap();
     let book = AddressBook::from_keys(&keys, DEFAULT_GAP_LIMIT, &secp).unwrap();
-    let addr = keys.address(2, NetworkKind::Test, &secp).unwrap();
+    let addr = keys.address(2, Network::Regtest, &secp).unwrap();
 
     let mining = env.mine_to_pre_mweb().expect("pre-mweb");
     let amount = Amount::from_btc(1.0).unwrap();

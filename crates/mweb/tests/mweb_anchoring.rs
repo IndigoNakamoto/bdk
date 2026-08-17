@@ -26,7 +26,7 @@ use bdk_mweb::lip0006::VerifyMode;
 use bdk_mweb::p2p::header_hash;
 use bdk_testenv::try_node_from_env;
 use bitcoin::key::Secp256k1;
-use bitcoin::{Amount, Network, NetworkKind};
+use bitcoin::{Amount, Network};
 
 #[test]
 fn hogex_commits_to_blake3_of_the_mweb_header() {
@@ -42,7 +42,7 @@ fn hogex_commits_to_blake3_of_the_mweb_header() {
         &secp,
     )
     .expect("keys");
-    let mweb_addr = keys.address(0, NetworkKind::Test, &secp).expect("address");
+    let mweb_addr = keys.address(0, Network::Regtest, &secp).expect("address");
 
     let mining = env.mine_to_pre_mweb().expect("pre-mweb");
     // A peg-in makes the MWEB block non-trivial, so the header carries real roots
@@ -142,7 +142,7 @@ fn p2p_mwebheader_carries_a_verifiable_anchor() {
         &secp,
     )
     .expect("keys");
-    let mweb_addr = keys.address(0, NetworkKind::Test, &secp).expect("address");
+    let mweb_addr = keys.address(0, Network::Regtest, &secp).expect("address");
 
     let mining = env.mine_to_pre_mweb().expect("pre-mweb");
     env.finalize_mweb_pegin(&mweb_addr, Amount::from_btc(1.0).unwrap())
@@ -241,7 +241,7 @@ fn anchored_verification_rejects_each_broken_link() {
         &secp,
     )
     .expect("keys");
-    let mweb_addr = keys.address(0, NetworkKind::Test, &secp).expect("address");
+    let mweb_addr = keys.address(0, Network::Regtest, &secp).expect("address");
 
     let mining = env.mine_to_pre_mweb().expect("pre-mweb");
     env.finalize_mweb_pegin(&mweb_addr, Amount::from_btc(1.0).unwrap())
@@ -367,7 +367,7 @@ fn anchored_sync_against_regtest_finds_the_pegin() {
     )
     .expect("keys");
     let book = AddressBook::from_keys(&keys, DEFAULT_GAP_LIMIT, &secp).expect("book");
-    let mweb_addr = keys.address(3, NetworkKind::Test, &secp).expect("address");
+    let mweb_addr = keys.address(3, Network::Regtest, &secp).expect("address");
 
     let mining = env.mine_to_pre_mweb().expect("pre-mweb");
     let amount = Amount::from_btc(1.0).unwrap();

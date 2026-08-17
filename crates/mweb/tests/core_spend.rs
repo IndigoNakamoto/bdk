@@ -7,7 +7,7 @@ use bdk_mweb::tx_builder::{MwebTxBuilder, CHANGE_ADDRESS_INDEX};
 use bdk_mweb::{scan_litecoin_tx, AddressBook, MwebCoinDatabase, DEFAULT_GAP_LIMIT};
 use bdk_testenv::{try_node_from_env, MWEB_PEGIN_MATURITY};
 use bitcoin::key::Secp256k1;
-use bitcoin::{Amount, Network, NetworkKind};
+use bitcoin::{Amount, Network};
 use hex_conservative::FromHex;
 
 const SEED_HEX: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -29,7 +29,7 @@ fn bdk_mweb_spend_accepted_by_litecoind() {
     .unwrap();
     let book = AddressBook::from_keys(&keys, DEFAULT_GAP_LIMIT, &secp).unwrap();
 
-    let addr = keys.address(2, NetworkKind::Test, &secp).unwrap();
+    let addr = keys.address(2, Network::Regtest, &secp).unwrap();
     let mining = env.mine_to_pre_mweb().expect("pre-mweb");
     let peg_in = Amount::from_btc(1.0).unwrap();
     let pegin_tx = env
@@ -60,7 +60,7 @@ fn bdk_mweb_spend_accepted_by_litecoind() {
         .add_input(coin.clone())
         .add_recipient(payee.clone(), pay_amount.to_sat())
         .fee(fee.to_sat())
-        .finish(&keys, CHANGE_ADDRESS_INDEX, NetworkKind::Test, &secp)
+        .finish(&keys, CHANGE_ADDRESS_INDEX, Network::Regtest, &secp)
         .expect("MwebTxBuilder::finish");
 
     let (allowed, reason) = env

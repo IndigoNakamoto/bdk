@@ -1,9 +1,10 @@
 //! MWEB stealth address helpers built on `litecoin::Address`.
 
+use bitcoin::address::MwebHrp;
 use bitcoin::address::{Address, NetworkUnchecked};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::All;
-use bitcoin::{AddressType, Network, NetworkKind};
+use bitcoin::{AddressType, Network};
 
 use crate::error::Error;
 use crate::keys::MasterKeys;
@@ -25,7 +26,7 @@ pub fn is_mweb_address(addr: &Address) -> bool {
 pub fn receive_address(
     keys: &MasterKeys,
     index: u32,
-    network: impl Into<NetworkKind>,
+    network: impl Into<MwebHrp>,
     secp: &Secp256k1<All>,
 ) -> Result<Address, Error> {
     keys.address(index, network, secp)

@@ -10,7 +10,7 @@
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpriv};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::{All, PublicKey, Scalar, SecretKey};
-use bitcoin::{Network, NetworkKind};
+use bitcoin::Network;
 
 use crate::error::Error;
 
@@ -201,10 +201,13 @@ impl MasterKeys {
     }
 
     /// Build a Litecoin MWEB [`Address`](bitcoin::Address) for `index`.
+    ///
+    /// Pass [`Network::Regtest`] for Core v24+ `rmweb`. [`NetworkKind::Test`]
+    /// still encodes `tmweb` (testnet / 0.21-style vectors).
     pub fn address(
         &self,
         index: u32,
-        network: impl Into<NetworkKind>,
+        network: impl Into<bitcoin::address::MwebHrp>,
         secp: &Secp256k1<All>,
     ) -> Result<bitcoin::Address, Error> {
         let (scan_pk, spend_pk) = self.stealth_pubkeys(index, secp)?;
@@ -233,6 +236,7 @@ mod tests {
     use super::*;
     use alloc::string::ToString;
     use bitcoin::secp256k1::Secp256k1;
+    use bitcoin::NetworkKind;
 
     fn test_keys() -> MasterKeys {
         MasterKeys::from_seed(
@@ -311,11 +315,11 @@ mod tests {
             &secp,
         )
         .unwrap();
-        let addr = keys.address(0, NetworkKind::Test, &secp).unwrap();
+        let addr = keys.address(0, Network::Regtest, &secp).unwrap();
         let encoded = addr.to_string();
         assert!(
-            encoded.starts_with("tmweb1"),
-            "regtest/testnet MWEB HRP, got {encoded}"
+            encoded.starts_with("rmweb1"),
+            "regtest MWEB HRP, got {encoded}"
         );
         let parsed = encoded
             .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
