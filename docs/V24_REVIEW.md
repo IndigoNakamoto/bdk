@@ -1,11 +1,11 @@
 # BDK vs Litecoin Core v24.0.1 pre-release
 
-Status: **review only** (2026-08-17). No CI pin, no rust-litecoin / BDK PSBT rewrite.
+Status: **review + parked alignment** (2026-08-17). No CI pin. LIP-0007 types live on `v24-rmweb` only.
 
 Pre-release tree: `/Users/indigo/Dev/litecoin-v24-master` (`Litecoin Core version v24.0.1`).
 Local binary used for this pass: `src/litecoind` (built `--with-gui=no --without-miniupnpc`; macOS needed the same `scrypt.h` / `scrypt.cpp` endian guards already present on the 0.21.5.6 tree).
 
-Losh’s LIP-0007 MWEB PSBT work is recorded as a finding. Official [lips](https://github.com/litecoin-project/lips) still only publishes LIP-0001–0006.
+LIP-0007 draft: [DavidBurkett/lips `lip0007`](https://github.com/DavidBurkett/lips/blob/lip0007/lip-0007.mediawiki). Official [lips](https://github.com/litecoin-project/lips) still only publishes LIP-0001–0006. Matrix: [`LIP0007.md`](LIP0007.md).
 
 ---
 
@@ -14,7 +14,7 @@ Losh’s LIP-0007 MWEB PSBT work is recorded as a finding. Official [lips](https
 Consensus, stealth derivation, LIP-0006 wire, and HogEx layout look unchanged from 0.21.5.6.
 **Regtest interop is blocked** by a new MWEB HRP (`rmweb` vs BDK/rust-litecoin `tmweb`).
 **Wallet defaults** broke seed-parity (`createwallet` → descriptor wallet; `sethdseed` is legacy-only).
-**PSBT maps have already diverged** (Core `0x96` = `mweb()` descriptor; BDK/ltcd `0x96` = u32 index + `0x9A`/`0x9B` origins). Leave BDK on the ltcd map until Losh’s LIP-0007 lands; do not rewrite types from this review.
+**PSBT maps have already diverged** (Core / LIP-0007 `0x96` = `mweb()` descriptor; the 2026-07-27 ltcd lock is u32 index + `0x9A`/`0x9B` origins). **BDK is the lagging peer.** Alignment is parked on `v24-rmweb`; `litecoin` stays on the ltcd map until a public v24 pin.
 
 ---
 
@@ -121,29 +121,26 @@ Live Core `walletcreatefundedpsbt` (descriptor wallet, after a Core `sendtoaddre
 | Input **`0x9A` / `0x9B`** | BIP32 origins `(PublicKey, KeySource)` | **absent** |
 | Output `0x90`–`0x98` | stealth … extra | same codes |
 
-Core `psbt.h` still **accepts** a 4-byte `0x96` as pre-descriptor compat and otherwise requires `mweb(` ASCII. BDK-authored **index** `0x96` can parse in Core; Core-authored **descriptor** `0x96` is dropped by rust-litecoin (`apply_kv_field` requires `value.len() == 4`) and does not land in `unknown` (type is in the MWEB range).
+Core `psbt.h` still **accepts** a 4-byte `0x96` as pre-descriptor compat and otherwise requires `mweb(` ASCII. rust-litecoin now does the same (ignore 4 bytes; otherwise require ASCII `mweb(`). BDK updater emits the descriptor; ltcd’s 4-byte index is ingest-only.
 
-### Container / version (second interop gap)
+### Container / version
 
-BDK / rust-litecoin still serialize **PSBTv0 + `unsigned_tx`**, with parallel pure-MWEB maps as **global keys** (`type_value = field`, key = 4-byte index). Core v24 forbids MWEB fields on v0 and puts input fields **in the input map** (empty key). `walletcreatefundedpsbt` + `decodepsbt` / `finalizepsbt` will not round-trip a BDK packet as-is.
-
-`bdk_mweb::psbt_ltcd` already ingests ltcd’s true v2 section layout for fixtures; that path is closer to Core than rust-litecoin’s default `Psbt` serialize.
+On `v24-rmweb`, rust-litecoin serializes MWEB packets as **PSBTv2** (BIP-370 globals, kernel section after outputs, MWEB maps after canonical). `psbt_ltcd` remains the **read** path for 0.21-era ltcd fixtures (index `0x96`, origins). Probe: [`crates/mweb/tests/core_psbt_lip0007.rs`](../crates/mweb/tests/core_psbt_lip0007.rs). Core golden bytes: `src/test/util/psbt_vectors.h`, `test/functional/mweb_psbt.py`.
 
 ### Losh / LIP-0007 stance
 
-- No LIP-0007 text in the official lips repo or this v24 tree.
-- v24 already encodes the descriptor-era map (`0x96` = `mweb()`, no `0x9A`/`0x9B`), with explicit 4-byte-index backward compat.
-- **Leave BDK on the ltcd map** until Losh publishes the remaining LIP-0007 delta (or Core drops the 4-byte compat).
-- Do **not** treat this pre-release as a reason to rewrite rust-litecoin types this week.
-- When aligning: add `address_descriptor: Option<String>` (or reuse `0x96` as an enum), keep reading 4-byte indexes, and emit PSBTv2 section maps if Core is the interop peer.
+- Draft exists on Burkett’s fork ([`lip-0007.mediawiki`](https://github.com/DavidBurkett/lips/blob/lip0007/lip-0007.mediawiki)); not yet in official lips.
+- v24 already implements that draft: `0x96` = `mweb()`, `0x9A`/`0x9B` reserved, 4-byte `0x96` ignored, PSBTv2 + kernel section.
+- **BDK / rust-litecoin on `v24-rmweb` align to that map** (descriptor emit, no origins on the wire, v2 + kernel sections). ltcd index/origins remain a **read** path (`psbt_ltcd`) for 0.21-era fixtures.
+- Do **not** merge to `litecoin` until official LIP-0007 or a public v24 artifact. See [`LIP0007.md`](LIP0007.md).
 
 ---
 
 ## 4. Recommended follow-ons (not done here)
 
-1. **rust-litecoin `rmweb` (on `v24-rmweb`):** `MwebHrp` distinguishes `Network::Regtest` (`rmweb`) from `NetworkKind::Test` (`tmweb`). BDK address APIs take `impl Into<MwebHrp>`; node suites pass `Network::Regtest`. Re-run on v24.0.1: `core_receive_scan`, `core_bulletproof_gate`, `core_spend`, `lip0006_*`, `mweb_anchoring` pass. Still failing: `core_seed_parity` (`sethdseed` / descriptor wallet) and `core_pegin_pegout_roundtrip` (`getreceivedbyaddress` = 0). Parked on branch `v24-rmweb` (rust-litecoin rev `dbf93a12`); do not merge to `litecoin` until CI can pin a public v24 artifact.
+1. **rust-litecoin `rmweb` + LIP-0007 (on `v24-rmweb`, rev `2e4577f`):** `MwebHrp` + PSBTv2 descriptor wire. `core_psbt_lip0007` passes against v24.0.1. Do not merge to `litecoin` until CI can pin a public v24 artifact.
 2. **Harness:** explicit `createwallet` `descriptors` flag; seed-parity on legacy or descriptors; peg-out credit via `include_immature_coinbase` or 6-block wait.
-3. **Optional probe test:** Core `walletcreatefundedpsbt` → rust-litecoin parse (expect dropped `0x96` descriptor today) and BDK fund → Core `decodepsbt` (expect v0 / unknown globals today).
+3. **Probe test:** `core_psbt_lip0007` — Core `walletcreatefundedpsbt` must keep `address_descriptor`; BDK fund must `decodepsbt` as v2. Vectors: v24 `src/test/util/psbt_vectors.h`.
 4. **CI pin:** only after a public v24 tarball + SHA256; keep 0.21.5.6 until then.
 5. Watch `generatetoaddress` around height 431 (`CreateNewBlock: bad-txns-vin-empty` seen once on this pre-release). BDK’s 431-then-activate sequence may still be right.
 

@@ -466,6 +466,7 @@ mod tests {
             master_fingerprint: Fingerprint::from([0u8; 4]),
             scan_path: DerivationPath::default(),
             spend_path: DerivationPath::default(),
+            network: bitcoin::NetworkKind::Main,
         }
     }
 

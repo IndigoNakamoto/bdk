@@ -1,7 +1,7 @@
 # ltcsuite alignment (reference inventory)
 
 Status: **Inventory locked** (2026-07-27, re-verified vs ltcd `master` `ltcutil/psbt/types.go`).  
-Per Losh: **copy ltcsuite PSBTv2 MWEB**; light sync follows **`mwebsync`**.  
+**Superseded for v24 interop** (2026-08-17): [LIP-0007](https://github.com/DavidBurkett/lips/blob/lip0007/lip-0007.mediawiki) + Core v24 are the target map. This file remains the **0.21-era / ltcd** inventory. See [`LIP0007.md`](LIP0007.md) and [`V24_REVIEW.md`](V24_REVIEW.md). Light sync still follows **`mwebsync`**.  
 Rust ports semantics into `litecoin` / `bdk_mweb` / `bdk_wallet` — **no Go FFI**.
 
 **Lock notes**

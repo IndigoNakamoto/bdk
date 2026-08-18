@@ -80,6 +80,7 @@ pub fn mweb_output_from_wire(output: &Output) -> MwebOutput {
         } else {
             Some(output.message.extra_data.clone())
         },
+        amount: None,
     }
 }
 
@@ -123,108 +124,120 @@ pub fn populate_psbt_from_mw(psbt: &mut Psbt, mw: &MwebTransaction, coins: &[Mwe
         .collect();
 }
 
-/// Populate BIP32 origins `0x9A`/`0x9B` (+ address index) on MWEB inputs (ltcwallet
-/// `populateMwebKeyOrigins`).
+/// LIP-0007 single-index updater descriptor: `mweb([fp/scan]WIF,[fp/spend]PUB,i)`.
 ///
-/// Always overwrites any pre-existing origin fields from wallet metadata.
+/// Scan is a private KEY (WIF). Spend is the master spend compressed pubkey (watch form).
+/// Matches Core v24 `doc/mweb/mweb-descriptors.md` + live `walletcreatefundedpsbt`.
+pub fn mweb_address_descriptor(
+    keys: &crate::keys::MasterKeys,
+    index: u32,
+    secp: &Secp256k1<All>,
+) -> alloc::string::String {
+    let scan_wif = bitcoin::key::PrivateKey::new(keys.scan, keys.network).to_wif();
+    let spend_hex = keys.spend_public(secp).to_string();
+    alloc::format!(
+        "mweb([{}{}]{},[{}{}]{},{})",
+        keys.master_fingerprint,
+        keys.scan_path,
+        scan_wif,
+        keys.master_fingerprint,
+        keys.spend_path,
+        spend_hex,
+        index
+    )
+}
+
+/// Updater: attach LIP-0007 `mweb()` descriptors. Does **not** emit reserved `0x9A`/`0x9B`.
+///
+/// `address_index` stays on the map for wallet-internal coin enrichment; rust-litecoin
+/// does not serialize it as `0x96`.
 pub fn populate_mweb_key_origins(
     psbt: &mut Psbt,
     keys: &crate::keys::MasterKeys,
     secp: &Secp256k1<All>,
 ) {
-    let scan_pk = keys.scan_public(secp);
-    let spend_pk = keys.spend_public(secp);
-    let scan_ks = keys.scan_key_source();
-    let spend_ks = keys.spend_key_source();
     for inp in &mut psbt.mweb_inputs {
+        inp.master_scan_key_origin = None;
+        inp.master_spend_key_origin = None;
         if let Some(idx) = inp.address_index {
-            let _ = idx; // already set from coin enrichment
+            inp.address_descriptor = Some(mweb_address_descriptor(keys, idx, secp));
         }
-        inp.master_scan_key_origin = Some((scan_pk, scan_ks.clone()));
-        inp.master_spend_key_origin = Some((spend_pk, spend_ks.clone()));
     }
     for inp in &mut psbt.inputs {
-        inp.mweb.master_scan_key_origin = Some((scan_pk, scan_ks.clone()));
-        inp.mweb.master_spend_key_origin = Some((spend_pk, spend_ks.clone()));
+        inp.mweb.master_scan_key_origin = None;
+        inp.mweb.master_spend_key_origin = None;
+        if let Some(idx) = inp.mweb.address_index {
+            inp.mweb.address_descriptor = Some(mweb_address_descriptor(keys, idx, secp));
+        }
     }
 }
 
-/// Validate that each MWEB input with spend metadata has complete origins (ltcwallet
-/// `validateMwebKeyOrigins`).
+/// Validate that each MWEB spend input has an ASCII `mweb(` descriptor (LIP-0007 updater).
 pub fn validate_mweb_key_origins(psbt: &Psbt) -> Result<(), Error> {
     for inp in &psbt.mweb_inputs {
-        let has_scan = inp.master_scan_key_origin.is_some();
-        let has_spend = inp.master_spend_key_origin.is_some();
-        let has_idx = inp.address_index.is_some();
-        if has_scan && has_spend && has_idx {
+        if inp.output_id.is_none() {
             continue;
         }
-        // Empty / unsigned placeholder inputs without coin metadata are allowed.
-        if !has_scan && !has_spend && !has_idx && inp.output_id.is_none() {
-            continue;
-        }
-        if inp.output_id.is_some() && !(has_scan && has_spend && has_idx) {
-            return Err(Error::Crypto(
-                "incomplete MWEB key origins (need scan, spend, and address index)".into(),
-            ));
+        match inp.address_descriptor.as_deref() {
+            Some(d) if d.starts_with("mweb(") => {}
+            _ => {
+                return Err(Error::Crypto(
+                    "incomplete MWEB address descriptor (need ASCII mweb(...))".into(),
+                ))
+            }
         }
     }
     Ok(())
 }
 
-/// Validate origins are present **and** match this wallet's master fingerprint + paths.
-///
-/// Rejects externally-supplied mismatched `0x9A`/`0x9B` KeySources (hardware / multi-sig
-/// coordinators rely on these fields to route signing requests).
+/// Validate descriptors match this wallet's fingerprint + scan/spend paths.
 pub fn validate_mweb_key_origins_against(
     psbt: &Psbt,
     keys: &crate::keys::MasterKeys,
 ) -> Result<(), Error> {
     validate_mweb_key_origins(psbt)?;
-    let expect_scan = keys.scan_key_source();
-    let expect_spend = keys.spend_key_source();
+    let fp = alloc::format!("{}", keys.master_fingerprint);
+    let scan = alloc::format!("{}", keys.scan_path);
+    let spend = alloc::format!("{}", keys.spend_path);
     for inp in &psbt.mweb_inputs {
         if inp.output_id.is_none() {
             continue;
         }
-        match &inp.master_scan_key_origin {
-            Some((_, ks)) if *ks == expect_scan => {}
-            Some(_) => {
-                return Err(Error::Crypto(
-                    "MWEB scan key origin fingerprint/path mismatch".into(),
-                ))
-            }
-            None => return Err(Error::Crypto("missing MWEB scan key origin".into())),
+        let desc = inp.address_descriptor.as_deref().unwrap_or("");
+        if !desc.contains(&fp) || !desc.contains(&scan) || !desc.contains(&spend) {
+            return Err(Error::Crypto(
+                "MWEB address descriptor fingerprint/path mismatch".into(),
+            ));
         }
-        match &inp.master_spend_key_origin {
-            Some((_, ks)) if *ks == expect_spend => {}
-            Some(_) => {
+        if let Some(idx) = inp.address_index {
+            let tail = alloc::format!(",{idx})");
+            if !desc.ends_with(&tail) {
                 return Err(Error::Crypto(
-                    "MWEB spend key origin fingerprint/path mismatch".into(),
-                ))
+                    "MWEB address descriptor index mismatch".into(),
+                ));
             }
-            None => return Err(Error::Crypto("missing MWEB spend key origin".into())),
         }
     }
     Ok(())
 }
 
-/// Scrub wallet secrets from maps before extract/broadcast (ltcd finalize hygiene).
+/// Scrub wallet secrets from maps before extract/broadcast.
 ///
-/// Removes amount / shared secret / address index / key-exchange from inputs. Keeps BIP32
-/// origins (`0x9A`/`0x9B`) for external-signer interop, plus wire fields needed to assemble
-/// `mw_tx` (commitments, pubkeys, signatures, rangeproofs, stealth address).
+/// Removes amount / shared secret / address index / key-exchange / the `mweb()`
+/// descriptor (scan WIF). Wire fields needed to assemble `mw_tx` stay.
 pub fn scrub_sensitive_fields(psbt: &mut Psbt) {
     for inp in &mut psbt.mweb_inputs {
         inp.amount = None;
         inp.shared_secret = None;
         inp.address_index = None;
+        inp.address_descriptor = None;
         inp.key_exchange_pubkey = None;
     }
     for inp in &mut psbt.inputs {
         inp.mweb.amount = None;
         inp.mweb.shared_secret = None;
         inp.mweb.address_index = None;
+        inp.mweb.address_descriptor = None;
         inp.mweb.key_exchange_pubkey = None;
     }
 }
@@ -510,29 +523,31 @@ mod tests {
         )
         .unwrap();
         assert!(funded.psbt.mweb_tx_offset.is_none());
-        assert!(funded.psbt.mweb_inputs[0].master_scan_key_origin.is_some());
-        assert!(funded.psbt.mweb_inputs[0].master_spend_key_origin.is_some());
-        assert_eq!(
-            funded.psbt.mweb_inputs[0]
-                .master_scan_key_origin
-                .as_ref()
-                .unwrap()
-                .0,
-            keys.scan_public(&secp)
-        );
+        assert!(funded.psbt.mweb_inputs[0].master_scan_key_origin.is_none());
+        assert!(funded.psbt.mweb_inputs[0].master_spend_key_origin.is_none());
+        let desc = funded.psbt.mweb_inputs[0]
+            .address_descriptor
+            .clone()
+            .expect("updater descriptor");
+        assert!(desc.starts_with("mweb("), "{desc}");
+        assert!(desc.contains(&format!("{}", keys.master_fingerprint)));
         validate_mweb_key_origins(&funded.psbt).unwrap();
         validate_mweb_key_origins_against(&funded.psbt, &keys).unwrap();
-        // Tamper fingerprint → against-wallet validate must reject.
+        // Tamper fingerprint in the descriptor → against-wallet validate must reject.
         {
-            let (pk, mut ks) = funded.psbt.mweb_inputs[0]
-                .master_scan_key_origin
-                .clone()
-                .unwrap();
-            ks.0 = bitcoin::bip32::Fingerprint::from([0xff, 0xff, 0xff, 0xff]);
-            funded.psbt.mweb_inputs[0].master_scan_key_origin = Some((pk, ks));
+            funded.psbt.mweb_inputs[0].address_descriptor =
+                Some(desc.replace(&format!("{}", keys.master_fingerprint), "ffffffff"));
             assert!(validate_mweb_key_origins_against(&funded.psbt, &keys).is_err());
-            // Restore for sign.
             populate_mweb_key_origins(&mut funded.psbt, &keys, &secp);
+        }
+        // Funded packet is PSBTv2; descriptor survives a serialize round-trip.
+        {
+            let decoded = Psbt::deserialize(&funded.psbt.serialize()).unwrap();
+            assert_eq!(decoded.version, 2);
+            assert_eq!(
+                decoded.mweb_inputs[0].address_descriptor,
+                funded.psbt.mweb_inputs[0].address_descriptor
+            );
         }
         assert_eq!(
             funded.psbt.mweb_outputs[0]
@@ -550,8 +565,9 @@ mod tests {
         assert!(funded.psbt.mweb_inputs[0].amount.is_none());
         assert!(funded.psbt.mweb_inputs[0].shared_secret.is_none());
         assert!(funded.psbt.mweb_inputs[0].address_index.is_none());
-        // Origins survive scrub for external-signer interop.
-        assert!(funded.psbt.mweb_inputs[0].master_scan_key_origin.is_some());
+        // Descriptor (scan WIF) is scrubbed; reserved origins stay absent.
+        assert!(funded.psbt.mweb_inputs[0].address_descriptor.is_none());
+        assert!(funded.psbt.mweb_inputs[0].master_scan_key_origin.is_none());
         assert!(funded
             .psbt
             .mweb_outputs
@@ -564,13 +580,11 @@ mod tests {
             tx.mw_tx.as_ref().unwrap().body.inputs[0].output_id,
             coin.output_id
         );
-        // Golden interop: serialize → deserialize preserves origins + maps.
         let bytes = funded.psbt.serialize();
         let decoded = Psbt::deserialize(&bytes).unwrap();
-        assert_eq!(
-            decoded.mweb_inputs[0].master_scan_key_origin,
-            funded.psbt.mweb_inputs[0].master_scan_key_origin
-        );
+        assert_eq!(decoded.version, 2);
+        assert!(decoded.mweb_inputs[0].address_descriptor.is_none());
+        assert!(decoded.mweb_inputs[0].master_scan_key_origin.is_none());
         assert_eq!(decoded.mweb_kernels.len(), funded.psbt.mweb_kernels.len());
     }
 

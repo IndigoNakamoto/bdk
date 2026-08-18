@@ -67,9 +67,9 @@ pub use keys::{address_index_tweak, master_keys_from_seed, MasterKeyScheme, Mast
 #[allow(deprecated)]
 pub use psbt::MwebPsbt;
 pub use psbt::{
-    enrich_input_from_coin, extract_tx_with_mweb, is_mweb_complete, mweb_input_from_wire,
-    mweb_kernel_from_wire, mweb_output_from_wire, populate_mweb_key_origins, populate_pegin_psbt,
-    populate_psbt_from_mw, psbt_from_finished_mweb_tx, scrub_sensitive_fields,
+    enrich_input_from_coin, extract_tx_with_mweb, is_mweb_complete, mweb_address_descriptor,
+    mweb_input_from_wire, mweb_kernel_from_wire, mweb_output_from_wire, populate_mweb_key_origins,
+    populate_pegin_psbt, populate_psbt_from_mw, psbt_from_finished_mweb_tx, scrub_sensitive_fields,
     sign_mweb_components, validate_mweb_key_origins, validate_mweb_key_origins_against,
     MwebPsbtInput, MwebPsbtKernel, MwebPsbtOutput, MWEB_KERNEL_COUNT_TYPE,
     MWEB_MASTER_SCAN_KEY_ORIGIN_TYPE, MWEB_MASTER_SPEND_KEY_ORIGIN_TYPE, MWEB_TX_OFFSET_TYPE,

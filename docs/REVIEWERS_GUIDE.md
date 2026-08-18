@@ -9,7 +9,8 @@ live interop was proven. Test/publish checklists stay in
 Longer context: [`PORTING.md`](../PORTING.md), [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md),
 [`LTCSUITE_ALIGNMENT.md`](LTCSUITE_ALIGNMENT.md), [`LITECOIN_E2E.md`](LITECOIN_E2E.md),
 [`LITECOIN_CORE_BRIEFING.md`](LITECOIN_CORE_BRIEFING.md),
-[`V24_REVIEW.md`](V24_REVIEW.md) (Core 24.0.1 pre-release vs BDK).
+[`V24_REVIEW.md`](V24_REVIEW.md) (Core 24.0.1 pre-release vs BDK),
+[`LIP0007.md`](LIP0007.md) (Burkett draft vs ltcd lock).
 
 Wallet-team onboarding (not reviewer narrative): [`ADOPTION.md`](ADOPTION.md),
 [`MIGRATE_FROM_MWEBD.md`](MIGRATE_FROM_MWEBD.md), [`INDEXING_NOTES.md`](INDEXING_NOTES.md).
@@ -19,7 +20,8 @@ Wallet-team onboarding (not reviewer narrative): [`ADOPTION.md`](ADOPTION.md),
 ## One-liner
 
 > BDK on Litecoin authors and verifies MWEB pegs/spends with Core-compatible crypto and stealth
-> keys, syncs via LIP-0006 with PMMR checks, and round-trips PSBTv2 MWEB maps matching ltcd —
+> keys, syncs via LIP-0006 with PMMR checks, and round-trips PSBTv2 MWEB maps (ltcd on `litecoin`;
+> LIP-0007 / Core v24 on `v24-rmweb`) —
 > without embedding Go/GPL, inventing a proprietary PSBT map, or stuffing HogAddr/v9 into the
 > transparent UTXO index.
 
@@ -46,8 +48,8 @@ Wallet-team onboarding (not reviewer narrative): [`ADOPTION.md`](ADOPTION.md),
 2. **MIT OR Apache-2.0** — no GPL Nexus/`lndltc` or in-process Go runtime.
 3. **Bifurcated state** — MWEB coins live in `MwebCoinDatabase`, never in transparent
    `IndexedTxGraph`.
-4. **Copy ltcsuite PSBT / sync shape** — do not invent a parallel key map; port semantics, don’t
-   FFI Go.
+4. **Copy the current interop PSBT / sync shape** — ltcd on the `litecoin` branch; LIP-0007 + Core
+   v24 on `v24-rmweb`. Do not invent a third map; port semantics, don’t FFI Go.
 5. **Consensus crypto via C-FFI** — same bulletproof/schnorr modules Core uses; not Elements CT,
    not pure-Rust Bulletproofs.
 6. **Core-compatible stealth by default** — `m/0'/100'/{0,1}'` + BLAKE3 `'A'` tweak (matches
@@ -77,7 +79,7 @@ Wallet-team onboarding (not reviewer narrative): [`ADOPTION.md`](ADOPTION.md),
 | --- | --- | --- |
 | Stealth / BlindSwitch | Litecoin Core 0.21 (v24 paths unchanged) | Core paths + H prefix `0x0b`; v24 regtest HRP is `rmweb` — see [`V24_REVIEW.md`](V24_REVIEW.md) |
 | Bulletproofs / Schnorr | Core / `grin_secp256k1zkp` | Gate: Core peg-in proofs verify under FFI |
-| PSBTv2 MWEB | ltcd `ltcutil/psbt` | Key codes locked 2026-07-27; see alignment doc |
+| PSBTv2 MWEB | ltcd `ltcutil/psbt` (0.21-era lock 2026-07-27) | v24 target is LIP-0007 + Core; see [`LIP0007.md`](LIP0007.md) |
 | Sign path | ltcwallet `SignMwebComponents` | fund → sign → scrub → `extract_tx_with_mweb` |
 | Light sync | `mwebsync` | Differential leafset, tip loop, PeerPool failover |
 | Interop peer | Foundation Nexus | Address/tx counterparty only — no linked Nexus code |

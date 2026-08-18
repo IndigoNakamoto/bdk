@@ -108,6 +108,7 @@ pub fn fund_mweb_spend(
         let (raw_blind, sender_key, output) = create_output(addr, *amount, secp)?;
         let mut mapped = mweb_output_from_wire(&output);
         mapped.stealth_address = Some(stealth_address_bytes(addr)?);
+        mapped.amount = Some(*amount);
         mweb_outputs.push(mapped);
         staged.push(StagedMwebOutput {
             output,
@@ -182,6 +183,8 @@ pub fn fund_mweb_spend(
 
     crate::psbt::populate_mweb_key_origins(&mut psbt, keys, secp);
     crate::psbt::validate_mweb_key_origins_against(&psbt, keys)?;
+    // Creator/updater only — offsets stay empty until the MWEB signer. Canonical
+    // signatures are applied by a later role (LIP-0007), not in this step.
 
     let _ = CHANGE_ADDRESS_INDEX;
     Ok(FundedMwebPsbt {
@@ -324,12 +327,15 @@ pub fn sign_funded_mweb(
             if let Some(sa) = stealth_by_commit.get(&c) {
                 out.stealth_address = Some(sa.clone());
             }
+            if let Some(staged) = funded.staged_outputs.iter().find(|s| s.output.commitment == c)
+            {
+                out.amount = Some(staged.amount);
+            }
         }
     }
 
-    // Re-attach origins after remap (wire remap drops wallet metadata).
+    // Re-attach descriptors after remap (wire remap drops wallet metadata).
     crate::psbt::populate_mweb_key_origins(&mut funded.psbt, _keys, secp);
-    // Validate before scrub clears address_index.
     crate::psbt::validate_mweb_key_origins_against(&funded.psbt, _keys)?;
     scrub_sensitive_fields(&mut funded.psbt);
     let _ = mw;
@@ -424,6 +430,7 @@ pub fn fund_mweb_pegin(
     let (raw_blind, sender_key, output) = create_output(&addr, receive_amount, secp)?;
     let mut mapped = mweb_output_from_wire(&output);
     mapped.stealth_address = Some(stealth_address_bytes(&addr)?);
+    mapped.amount = Some(receive_amount);
 
     let mut features = KernelFeatures::PeginFeatureBit as u8;
     if fee > 0 {
@@ -530,6 +537,10 @@ pub fn sign_funded_mweb_pegin(
         if let Some(c) = out.commit {
             if let Some(sa) = stealth_by_commit.get(&c) {
                 out.stealth_address = Some(sa.clone());
+            }
+            if let Some(staged) = funded.staged_outputs.iter().find(|s| s.output.commitment == c)
+            {
+                out.amount = Some(staged.amount);
             }
         }
     }

@@ -1,9 +1,8 @@
 //! Ingest ltcd PSBTv2 MWEB packets into rust-litecoin [`Psbt`] maps.
 //!
-//! ltcd serializes pure-MWEB PSBTs as BIP370 v2 (global version + input/output/kernel
-//! map sections). rust-litecoin currently round-trips MWEB on PSBTv0 with indexed
-//! global keys. This module bridges Go-produced bytes so BDK can extract / validate
-//! without requiring a Go toolchain at test time.
+//! rust-litecoin now emits LIP-0007 / Core v24 (descriptor `0x96`, kernel section).
+//! This module stays as a **read** path for 0.21-era ltcd fixtures that still use
+//! a 4-byte address index on `0x96` and BIP32 origins on `0x9A`/`0x9B`.
 
 use alloc::vec::Vec;
 

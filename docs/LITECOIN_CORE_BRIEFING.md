@@ -110,7 +110,7 @@ Latest tip: `58171f0a` — *consume litecoin 0.32.8-rc.2 PSBT maps and harden Pe
 
 Per Losh guidance documented in-repo: **copy ltcsuite PSBTv2 MWEB**; light sync follows **mwebsync**; do not invent a divergent map.
 
-Related docs: [LTCSUITE_ALIGNMENT.md](LTCSUITE_ALIGNMENT.md), [MWEB_ARCHITECTURE.md](MWEB_ARCHITECTURE.md), [PORTING.md](../PORTING.md), [LITECOIN_E2E.md](LITECOIN_E2E.md), [MWEB_PEER_OPS.md](MWEB_PEER_OPS.md), [V24_REVIEW.md](V24_REVIEW.md) (v24.0.1 pre-release comparison).
+Related docs: [LTCSUITE_ALIGNMENT.md](LTCSUITE_ALIGNMENT.md), [LIP0007.md](LIP0007.md), [MWEB_ARCHITECTURE.md](MWEB_ARCHITECTURE.md), [PORTING.md](../PORTING.md), [LITECOIN_E2E.md](LITECOIN_E2E.md), [MWEB_PEER_OPS.md](MWEB_PEER_OPS.md), [V24_REVIEW.md](V24_REVIEW.md) (v24.0.1 pre-release comparison).
 
 ---
 

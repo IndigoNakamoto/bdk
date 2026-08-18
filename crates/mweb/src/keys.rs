@@ -10,7 +10,7 @@
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, KeySource, Xpriv};
 use bitcoin::key::Secp256k1;
 use bitcoin::secp256k1::{All, PublicKey, Scalar, SecretKey};
-use bitcoin::Network;
+use bitcoin::{Network, NetworkKind};
 
 use crate::error::Error;
 
@@ -87,6 +87,8 @@ pub struct MasterKeys {
     pub scan_path: DerivationPath,
     /// Full derivation path to the spend key.
     pub spend_path: DerivationPath,
+    /// Network of the seed / xprv (WIF version for `mweb()` descriptors).
+    pub network: NetworkKind,
 }
 
 /// Best-effort wipe of `scan` and `spend` when the keys go out of scope.
@@ -111,6 +113,7 @@ impl core::fmt::Debug for MasterKeys {
             .field("master_fingerprint", &self.master_fingerprint)
             .field("scan_path", &self.scan_path)
             .field("spend_path", &self.spend_path)
+            .field("network", &self.network)
             .finish()
     }
 }
@@ -155,15 +158,16 @@ impl MasterKeys {
             master_fingerprint: fingerprint,
             scan_path,
             spend_path,
+            network: master.network,
         })
     }
 
-    /// BIP32 [`KeySource`] for the master scan key (`0x9A`).
+    /// BIP32 [`KeySource`] for the master scan key (ltcd ingest / wallet-internal).
     pub fn scan_key_source(&self) -> KeySource {
         (self.master_fingerprint, self.scan_path.clone())
     }
 
-    /// BIP32 [`KeySource`] for the master spend key (`0x9B`).
+    /// BIP32 [`KeySource`] for the master spend key (ltcd ingest / wallet-internal).
     pub fn spend_key_source(&self) -> KeySource {
         (self.master_fingerprint, self.spend_path.clone())
     }

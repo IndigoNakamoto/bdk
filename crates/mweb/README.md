@@ -8,9 +8,9 @@ MWEB primitives for the Litecoin BDK fork:
   - send/peg-out: `fund_mweb_spend` / `sign_funded_mweb` → `Psbt::extract_tx_with_mweb`
   - peg-in: `fund_mweb_pegin` / `sign_funded_mweb_pegin` → merge maps → extract
     (`build_pegin` deprecated)
-- BIP32 origins `0x9A`/`0x9B` via `populate_mweb_key_origins` /
-  `validate_mweb_key_origins_against` (ltcwallet-shaped; hardware / multi-sig
-  coordinators can route on fingerprint + path; scrub leaves origins on the PSBT)
+- LIP-0007 updater descriptor via `mweb_address_descriptor` /
+  `populate_mweb_key_origins` (ASCII `mweb(...)` on `0x96`; reserved `0x9A`/`0x9B`
+  are not emitted). ltcd index/origins remain a **read** path (`psbt_from_ltcd_v2`)
 - MW `secp256k1-zkp` FFI: 675-byte bulletproofs + schnorr
 - Feature `persist`: parallel `ChangeSet` for file_store
 - Feature `rusqlite`: SQLite-beside-wallet tables
