@@ -168,6 +168,7 @@ BIP32 origins `0x9A` (scan) / `0x9B` (spend) are populated on fund and **kept th
 | --- | --- |
 | [`DOGFOOD_CHECKLIST.md`](DOGFOOD_CHECKLIST.md) | Timed pass of this guide on a clean clone |
 | [`PORTING.md`](../PORTING.md) | Alias strategy, fork pins, ecosystem limits |
+| [`TEST_EVIDENCE.md`](TEST_EVIDENCE.md) | How we tested (Core / ltcsuite run-this) |
 | [`LITECOIN_E2E.md`](LITECOIN_E2E.md) | Full testnet / regtest / mainnet recipes |
 | [`MIGRATE_FROM_MWEBD.md`](MIGRATE_FROM_MWEBD.md) | Leave embedded mwebd |
 | [`INDEXING_NOTES.md`](INDEXING_NOTES.md) | Why no MWEB Esplora; integrator sync contract |

@@ -28,6 +28,7 @@
 > **Integrating a wallet?** Start with **[docs/ADOPTION.md](./docs/ADOPTION.md)** (Rust vs FFI,
 > blessed pins, maps-first MWEB API). Prove it with
 > [docs/DOGFOOD_CHECKLIST.md](./docs/DOGFOOD_CHECKLIST.md). Port internals: [PORTING.md](./PORTING.md).
+> Show Core / ltcsuite how we tested: [docs/TEST_EVIDENCE.md](./docs/TEST_EVIDENCE.md).
 > E2E recipes: [docs/LITECOIN_E2E.md](./docs/LITECOIN_E2E.md). Leaving embedded mwebd:
 > [docs/MIGRATE_FROM_MWEBD.md](./docs/MIGRATE_FROM_MWEBD.md) **first**.
 >

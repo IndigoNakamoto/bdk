@@ -2,6 +2,8 @@
 
 **Suggested subject:** BDK Litecoin + native MWEB: light wallet stack aligned with Core / ltcsuite
 
+**How we tested (run this first):** [TEST_EVIDENCE.md](TEST_EVIDENCE.md).
+
 ---
 
 ## What this is
@@ -110,7 +112,7 @@ Latest tip: `58171f0a` — *consume litecoin 0.32.8-rc.2 PSBT maps and harden Pe
 
 Per Losh guidance documented in-repo: **copy ltcsuite PSBTv2 MWEB**; light sync follows **mwebsync**; do not invent a divergent map.
 
-Related docs: [LTCSUITE_ALIGNMENT.md](LTCSUITE_ALIGNMENT.md), [MWEB_ARCHITECTURE.md](MWEB_ARCHITECTURE.md), [PORTING.md](../PORTING.md), [LITECOIN_E2E.md](LITECOIN_E2E.md), [MWEB_PEER_OPS.md](MWEB_PEER_OPS.md).
+Related docs: [TEST_EVIDENCE.md](TEST_EVIDENCE.md), [LTCSUITE_ALIGNMENT.md](LTCSUITE_ALIGNMENT.md), [MWEB_ARCHITECTURE.md](MWEB_ARCHITECTURE.md), [PORTING.md](../PORTING.md), [LITECOIN_E2E.md](LITECOIN_E2E.md), [MWEB_PEER_OPS.md](MWEB_PEER_OPS.md).
 
 ---
 

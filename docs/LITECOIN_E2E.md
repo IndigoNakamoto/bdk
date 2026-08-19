@@ -3,8 +3,9 @@
 This walkthrough is the "works end to end" artifact for the Litecoin fork. It uses the
 ported `bdk_wallet` against live Litecoin testnet infrastructure.
 
-New to the stack? Start with [`ADOPTION.md`](ADOPTION.md). Migrating off embedded mwebd?
-See [`MIGRATE_FROM_MWEBD.md`](MIGRATE_FROM_MWEBD.md).
+Showing Core / ltcsuite how this was tested? Start with
+[`TEST_EVIDENCE.md`](TEST_EVIDENCE.md). New to the stack? [`ADOPTION.md`](ADOPTION.md).
+Migrating off embedded mwebd? [`MIGRATE_FROM_MWEBD.md`](MIGRATE_FROM_MWEBD.md).
 
 ## Start here (≈30 minutes)
 

@@ -46,6 +46,9 @@ Or SQLite (`ChangeSet::init_sqlite_tables` / `persist_to_sqlite` / `from_sqlite`
 `blind`, `shared_secret`, and `spend_key` are spend-equivalent — use `seal` /
 `seal_changeset` with an app-owned key. **Not** folded into `Wallet::ChangeSet`.
 
+Showing Core / ltcsuite the full transparent + MWEB packet:
+[`docs/TEST_EVIDENCE.md`](../../docs/TEST_EVIDENCE.md).
+
 ```bash
 export LITECOIND_EXE=/path/to/litecoind
 cargo test -p bdk_mweb --all-features

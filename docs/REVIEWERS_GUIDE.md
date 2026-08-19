@@ -6,6 +6,9 @@ live interop was proven. Test/publish checklists stay in
 [`RUST_LITECOIN_PR_BODY.md`](RUST_LITECOIN_PR_BODY.md) and
 [`RUST_LITECOIN_PSBT_PR.md`](RUST_LITECOIN_PSBT_PR.md).
 
+Independent verification (commands + CI + recorded ids):
+[`TEST_EVIDENCE.md`](TEST_EVIDENCE.md).
+
 Longer context: [`PORTING.md`](../PORTING.md), [`MWEB_ARCHITECTURE.md`](MWEB_ARCHITECTURE.md),
 [`LTCSUITE_ALIGNMENT.md`](LTCSUITE_ALIGNMENT.md), [`LITECOIN_E2E.md`](LITECOIN_E2E.md),
 [`LITECOIN_CORE_BRIEFING.md`](LITECOIN_CORE_BRIEFING.md).
@@ -88,6 +91,8 @@ Golden data (port vectors, not Go tests): `crates/mweb/tests/fixtures/` + `ltcd_
 
 ## Live proof
 
+Run-this packet: [`TEST_EVIDENCE.md`](TEST_EVIDENCE.md).
+
 | Stage | Evidence |
 | --- | --- |
 | Unit / Core gate | Seed parity; `core_bulletproof_gate` verifies Core peg-in proofs |
@@ -167,6 +172,7 @@ rangeproofs, pure-Rust Bulletproofs, inventing a non-ltcsuite PSBT map.
 
 Regtest Core gates + testnet Electrum spend; mainnet 2026-07-27 peg-in → BDK→Nexus send → peg-out
 (identify pure MWEB by **wtxid**). Fixtures: ltcd golden vectors under `crates/mweb/tests/fixtures/`.
+Run-this packet: `docs/TEST_EVIDENCE.md`.
 
 ### Reviewer's Guide
 
